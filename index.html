@@ -15,6 +15,10 @@
       background: rgba(0,0,0,0.35); padding: 6px 16px; border-radius: 8px; display: none; }
     #status { position: fixed; left: 12px; bottom: 10px; font: 12px Menlo, monospace; color: #9aa7ad;
       text-shadow: 0 1px 2px #000; pointer-events: none; }
+    #reticle { position: fixed; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%;
+      border: 2px solid #ffd23c; box-shadow: 0 0 4px #000; pointer-events: none; display: none; }
+    #tip { position: fixed; left: 50%; top: calc(50% + 22px); transform: translateX(-50%); pointer-events: none; display: none;
+      font: 600 13px Menlo, monospace; color: #ffe9a6; background: rgba(0,0,0,0.55); padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
     .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
       background: radial-gradient(ellipse at center, rgba(20,26,32,0.88), rgba(6,8,10,0.96)); }
     .card { max-width: 760px; width: calc(100% - 32px); max-height: calc(100% - 32px); overflow: auto;
@@ -40,14 +44,18 @@
   <div id="blackout"></div>
   <div id="msg"></div>
   <div id="status"></div>
+  <div id="reticle"></div>
+  <div id="tip"></div>
+  <div id="debrief" class="overlay" style="display:none"></div>
 
   <div id="menu" class="overlay">
     <div class="card">
       <h1>PROJECT HEATER</h1>
-      <p class="sub">KR-7 Kestrel · Increment 1: flight, cockpit and airfield</p>
+      <p class="sub">KR-7 Kestrel · Increment 2: cold start, taxi, takeoff, landing and shutdown</p>
       <div class="pad" id="padStatus">No controller detected. Plug in your controller and press any button.</div>
       <div class="buttons">
-        <button id="btnRamp" data-start="ramp">Ramp start (taxi out)</button>
+        <button id="btnCold" data-start="cold">Cold start on the ramp</button>
+        <button id="btnHot" data-start="hot">Ramp start, engine running</button>
         <button id="btnRunway" data-start="runway">Runway start</button>
         <button id="btnAir" data-start="air">Air start, 8,000 ft</button>
         <button id="btnResume" style="display:none">Resume</button>
@@ -61,6 +69,8 @@
             <tr><td>LB / RB</td><td>Rudder and nosewheel steering</td></tr>
             <tr><td>Right stick</td><td>Look around, release to look ahead</td></tr>
             <tr><td>A (hold)</td><td>Wheel brakes</td></tr>
+            <tr><td>View button</td><td>Switch mode: right stick moves your head and stays, A presses the switch under the dot, B exits</td></tr>
+            <tr><td>D-pad left / right</td><td>Left screen page (checklist / engine)</td></tr>
             <tr><td>Y</td><td>Landing gear</td></tr>
             <tr><td>B</td><td>Speedbrake</td></tr>
             <tr><td>D-pad up / down</td><td>Zoom in / out</td></tr>
@@ -75,6 +85,8 @@
             <tr><td>A / D</td><td>Roll left / right</td></tr>
             <tr><td>Q / E</td><td>Rudder</td></tr>
             <tr><td>Shift / Ctrl</td><td>Throttle up / down</td></tr>
+            <tr><td>Click a switch</td><td>Flip it (or F for switch mode, Enter to press)</td></tr>
+            <tr><td>M</td><td>Left screen page</td></tr>
             <tr><td>B (hold)</td><td>Wheel brakes</td></tr>
             <tr><td>G / V</td><td>Gear / speedbrake</td></tr>
             <tr><td>Drag or arrow keys</td><td>Look around (C resets)</td></tr>

@@ -3,6 +3,11 @@ import { AircraftState, CONSTANTS } from '../sim/aircraft';
 import { ControlInput } from '../sim/aircraft';
 import { RUNWAY, TERRAIN_SIZE, Terrain, BASE_ELEV } from '../sim/terrain';
 import { APRON, TAXIWAYS } from './world';
+import { SwitchPanel } from './switches';
+import { checklist } from '../checklist';
+
+export type LeftPage = 'CHK' | 'ENG';
+const LEFT_PAGES: LeftPage[] = ['CHK', 'ENG'];
 
 // Original low-poly cockpit for the fictional KR-7 Kestrel.
 // Units are meters, the pilot's eye is at the origin, -Z is forward.
@@ -23,6 +28,13 @@ export class Cockpit {
   private ufc: Mfd;
   private mfdTimer = 0;
   private mapImage: HTMLCanvasElement;
+  private canopy = new THREE.Group();
+  private navLights: { mesh: THREE.Mesh; on: number }[] = [];
+  private strobe!: THREE.Mesh;
+  readonly switches: SwitchPanel;
+  leftPage: LeftPage = 'ENG';
+  hasFlown = false;
+  private powered = true;
 
   constructor(terrain: Terrain) {
     this.camera = new THREE.PerspectiveCamera(70, 1, 0.03, 200000);
@@ -62,15 +74,9 @@ export class Cockpit {
     // Side consoles.
     add(new THREE.BoxGeometry(0.17, 0.1, 0.95), lam(PANEL), -0.36, -0.52, -0.12);
     add(new THREE.BoxGeometry(0.17, 0.1, 0.95), lam(PANEL), 0.36, -0.52, -0.12);
-    // Small switch blocks on the consoles.
-    const switchMat = lam(0x5a6066);
-    for (let i = 0; i < 5; i++) {
-      add(new THREE.BoxGeometry(0.03, 0.02, 0.05), switchMat, -0.4 + (i % 2) * 0.06, -0.46, 0.05 + i * 0.07);
-      add(new THREE.BoxGeometry(0.03, 0.02, 0.05), switchMat, 0.34 + (i % 2) * 0.06, -0.46, 0.05 + i * 0.07);
-    }
 
     // Throttle on the left console, side stick on the right.
-    this.throttleGrip = add(new THREE.BoxGeometry(0.05, 0.1, 0.07), lam(0x3c4146), -0.33, -0.42, -0.1);
+    this.throttleGrip = add(new THREE.BoxGeometry(0.05, 0.1, 0.07), lam(0x3c4146), -0.3, -0.42, -0.1);
     const stickPivot = new THREE.Group();
     stickPivot.position.set(0.33, -0.47, -0.25);
     this.root.add(stickPivot);
@@ -90,8 +96,20 @@ export class Cockpit {
     // Canopy rails and the bow behind the seat.
     add(new THREE.BoxGeometry(0.05, 0.05, 1.9), lam(PANEL_DARK), -0.44, -0.17, -0.1);
     add(new THREE.BoxGeometry(0.05, 0.05, 1.9), lam(PANEL_DARK), 0.44, -0.17, -0.1);
-    const bow = add(new THREE.TorusGeometry(0.46, 0.022, 6, 24, Math.PI), lam(PANEL_DARK), 0, -0.17, 0.62);
+    // Canopy: a bubble hinged at the back that lifts at the front.
+    this.canopy.position.set(0, -0.17, 0.75);
+    this.root.add(this.canopy);
+    const bow = add(new THREE.TorusGeometry(0.46, 0.022, 6, 24, Math.PI), lam(PANEL_DARK), 0, 0, -0.13, this.canopy);
     bow.scale.set(0.95, 1.05, 1);
+    const bubbleGeo = new THREE.SphereGeometry(1, 28, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+    const bubble = new THREE.Mesh(bubbleGeo, new THREE.MeshBasicMaterial({
+      color: 0xc9dbe6, transparent: true, opacity: 0.07, depthWrite: false, side: THREE.DoubleSide,
+    }));
+    bubble.scale.set(0.47, 0.52, 1.25);
+    bubble.position.set(0, 0, -1.0);
+    this.canopy.add(bubble);
+    // Canopy sill frames that travel with the glass.
+    for (const x of [-0.45, 0.45]) add(new THREE.BoxGeometry(0.025, 0.03, 2.2), lam(PANEL_DARK), x, 0.01, -1.0, this.canopy);
     // Seat headrest.
     add(new THREE.BoxGeometry(0.3, 0.32, 0.1), lam(0x3a3430), 0, -0.08, 0.22);
 
@@ -121,6 +139,16 @@ export class Cockpit {
     const fin = add(new THREE.ShapeGeometry(finShape), wingMat, 0, -0.25, 5.2);
     fin.rotation.y = -Math.PI / 2;
 
+    // Position lights: red left wingtip, green right, white strobe on the fin.
+    const lightGeo = new THREE.SphereGeometry(0.06, 8, 6);
+    for (const [x, color] of [[-5.15, 0xff2a2a], [5.15, 0x2aff5a]] as [number, number][]) {
+      const m = add(lightGeo, new THREE.MeshBasicMaterial({ color: 0x222222 }), x, -0.85, 4.4);
+      this.navLights.push({ mesh: m, on: color });
+    }
+    this.strobe = add(lightGeo, new THREE.MeshBasicMaterial({ color: 0x222222 }), 0, 1.95, 7.6);
+
+    this.switches = new SwitchPanel(this.root, panel);
+
     this.mapImage = buildMapImage(terrain);
   }
 
@@ -135,15 +163,39 @@ export class Cockpit {
       this.camera.updateProjectionMatrix();
     }
     this.throttleGrip.position.z = -0.02 - input.throttle * 0.2;
+    this.canopy.visible = !s.canopyBroken;
+    this.canopy.rotation.x = 0.5 * (1 - s.canopyPos);
+    const lightsOn = input.switches.navLights && (s.batteryPower || s.generator);
+    for (const l of this.navLights) (l.mesh.material as THREE.MeshBasicMaterial).color.setHex(lightsOn ? l.on : 0x222222);
+    const flash = lightsOn && (s.time % 1.2) < 0.08;
+    (this.strobe.material as THREE.MeshBasicMaterial).color.setHex(flash ? 0xffffff : 0x222222);
+    this.switches.update(input, s);
     this.stick.rotation.set(input.pitch * 0.25, 0, -input.roll * 0.25);
 
     this.mfdTimer -= dt;
     if (this.mfdTimer <= 0) {
       this.mfdTimer = 0.1;
-      drawEnginePage(this.leftMfd, s, input);
-      drawNavPage(this.rightMfd, s, this.mapImage);
+      if (s.avionicsPower) {
+        if (this.leftPage === 'ENG') drawEnginePage(this.leftMfd, s, input);
+        else drawChecklistPage(this.leftMfd, s, input, this.hasFlown);
+        drawNavPage(this.rightMfd, s, this.mapImage);
+        this.powered = true;
+      } else if (this.powered) {
+        for (const m of [this.leftMfd, this.rightMfd]) {
+          m.ctx.fillStyle = '#020303';
+          m.ctx.fillRect(0, 0, 256, 256);
+          m.tex.needsUpdate = true;
+        }
+        this.powered = false;
+      }
       drawUfc(this.ufc, s, input);
     }
+  }
+
+  cycleLeftPage(dir: number) {
+    const i = LEFT_PAGES.indexOf(this.leftPage);
+    this.leftPage = LEFT_PAGES[(i + dir + LEFT_PAGES.length) % LEFT_PAGES.length];
+    this.mfdTimer = 0;
   }
 
   /** HUD combiner corners in world space, for clipping the HUD overlay. */
@@ -176,20 +228,26 @@ const AMBER = '#ffbf3c';
 const RED = '#ff4a3c';
 const WHITE = '#e6ecef';
 
-function frame(m: Mfd, title: string, buttons: string[]) {
+function frame(m: Mfd, title: string, buttons: string[], active = '') {
   const g = m.ctx;
   g.fillStyle = '#05090a';
   g.fillRect(0, 0, 256, 256);
   g.font = 'bold 13px monospace';
   g.textAlign = 'center';
-  g.fillStyle = WHITE;
-  buttons.forEach((b, i) => g.fillText(b, 32 + i * 48, 16));
+  buttons.forEach((b, i) => {
+    if (b === active) {
+      g.fillStyle = WHITE;
+      g.fillRect(32 + i * 48 - 18, 4, 36, 16);
+      g.fillStyle = '#05090a';
+    } else g.fillStyle = WHITE;
+    g.fillText(b, 32 + i * 48, 16);
+  });
   g.fillStyle = GREEN;
   g.fillText(title, 128, 248);
 }
 
 function drawEnginePage(m: Mfd, s: AircraftState, input: ControlInput) {
-  frame(m, 'ENG / FUEL', ['ENG', 'NAV', 'TGP', 'WPN', 'SYS']);
+  frame(m, 'ENG / FUEL   ◀ ▶ PAGE', ['CHK', 'ENG'], 'ENG');
   const g = m.ctx;
   g.textAlign = 'left';
   g.font = 'bold 15px monospace';
@@ -264,6 +322,32 @@ function drawEnginePage(m: Mfd, s: AircraftState, input: ControlInput) {
   m.tex.needsUpdate = true;
 }
 
+function drawChecklistPage(m: Mfd, s: AircraftState, input: ControlInput, hasFlown: boolean) {
+  const list = checklist(s, input, hasFlown);
+  frame(m, 'CHECKLIST   ◀ ▶ PAGE', ['CHK', 'ENG'], 'CHK');
+  const g = m.ctx;
+  g.textAlign = 'left';
+  g.font = 'bold 15px monospace';
+  g.fillStyle = list.phase === 'taxi' || list.phase === 'complete' ? GREEN : AMBER;
+  g.fillText(list.phase === 'complete' ? 'SHUTDOWN COMPLETE' : list.title, 14, 42);
+  g.font = 'bold 12px monospace';
+  const next = list.items.findIndex((i) => !i.done);
+  list.items.forEach((item, i) => {
+    const y = 66 + i * 19;
+    if (i === next) {
+      g.fillStyle = 'rgba(125,255,158,0.15)';
+      g.fillRect(8, y - 13, 240, 18);
+    }
+    g.fillStyle = item.done ? GREEN : i === next ? WHITE : '#7d878c';
+    g.fillText(item.done ? '✓' : i === next ? '▶' : '·', 14, y);
+    g.fillText(item.text, 32, y);
+  });
+  // Live RPM readout helps time the start.
+  g.fillStyle = WHITE;
+  g.fillText(`RPM ${Math.round(s.rpm * 100)}%  ${s.jfsRunning ? 'JFS RUN' : ''}${s.starting ? ' LIGHT-OFF' : ''}`, 14, 236);
+  m.tex.needsUpdate = true;
+}
+
 function buildMapImage(terrain: Terrain) {
   const cv = document.createElement('canvas');
   const N = 256;
@@ -288,7 +372,7 @@ function buildMapImage(terrain: Terrain) {
 }
 
 function drawNavPage(m: Mfd, s: AircraftState, map: HTMLCanvasElement) {
-  frame(m, 'NAV  NORTH UP  40 NM', ['ENG', 'NAV', 'TGP', 'WPN', 'SYS']);
+  frame(m, 'NAV  NORTH UP  40 NM', ['NAV'], 'NAV');
   const g = m.ctx;
   const area = { x: 8, y: 24, w: 240, h: 212 };
   g.save();
@@ -361,6 +445,10 @@ function drawUfc(m: Mfd, s: AircraftState, input: ControlInput) {
   const g = m.ctx;
   g.fillStyle = '#0b0d0c';
   g.fillRect(0, 0, 256, 170);
+  if (!s.batteryPower && !s.generator) {
+    m.tex.needsUpdate = true;
+    return;
+  }
   g.font = 'bold 26px monospace';
   g.fillStyle = '#9dff6a';
   g.textAlign = 'left';
@@ -370,9 +458,9 @@ function drawUfc(m: Mfd, s: AircraftState, input: ControlInput) {
   // Warning lights.
   const lights: [string, boolean, string][] = [
     ['ENG', !s.engineRunning, RED],
-    ['FUEL', s.fuel * 2.2046 < 1500, AMBER],
-    ['GEAR', s.gearPos > 0.01 && s.gearPos < 0.99, AMBER],
-    ['BRK', input.brakes > 0, AMBER],
+    ['GEN', !s.generator, AMBER],
+    ['CNPY', s.canopyPos < 0.99, AMBER],
+    ['BRK', input.brakes > 0 || s.parkingBrake, AMBER],
   ];
   g.font = 'bold 18px monospace';
   lights.forEach(([txt, on, col], i) => {

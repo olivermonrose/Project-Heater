@@ -1,4 +1,4 @@
-import { ControlInput, CONSTANTS } from '../sim/aircraft';
+import { ControlInput, CONSTANTS, coldSwitches, hotSwitches } from '../sim/aircraft';
 
 // Standard gamepad mapping (Xbox Series / Elite controllers on macOS browsers).
 const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU: 9, LS: 10, RS: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
@@ -14,6 +14,9 @@ export interface UiActions {
   restart: boolean;
   toggleHelp: boolean;
   recenter: boolean;
+  interactCenter: boolean; // press whatever switch is under the centre reticle
+  click: { x: number; y: number } | null; // mouse click in CSS pixels
+  mfdPage: number; // -1 / +1 to cycle the left MFD page
 }
 
 function deadzone(v: number, dz = 0.12) {
@@ -24,7 +27,10 @@ function deadzone(v: number, dz = 0.12) {
 const expo = (v: number, e = 1.6) => Math.sign(v) * Math.pow(Math.abs(v), e);
 
 export class Input {
-  controls: ControlInput = { pitch: 0, roll: 0, yaw: 0, throttle: 0, brakes: 0, gearDown: true, speedbrake: false };
+  controls: ControlInput = { pitch: 0, roll: 0, yaw: 0, throttle: 0, brakes: 0, gearDown: true, speedbrake: false, switches: hotSwitches() };
+  /** Switch mode: the right stick moves your head and leaves it there, A presses the switch under the reticle. */
+  interactMode = false;
+  mouse = { x: -1, y: -1 };
   look: LookInput = { yaw: 0, pitch: 0, fov: 70 };
   gamepadName = '';
   invertPitch = false;
@@ -36,6 +42,8 @@ export class Input {
   private dragging = false;
   private padLook = { yaw: 0, pitch: 0 };
   private abGate = false; // must release and press again to cross into afterburner
+  private downAt = { x: 0, y: 0 };
+  private pendingClick: { x: number; y: number } | null = null;
 
   constructor(private canvas: HTMLElement) {
     window.addEventListener('keydown', (e) => {
@@ -45,9 +53,18 @@ export class Input {
     });
     window.addEventListener('keyup', (e) => this.keys.delete(e.code));
     window.addEventListener('blur', () => this.keys.clear());
-    canvas.addEventListener('mousedown', () => (this.dragging = true));
-    window.addEventListener('mouseup', () => (this.dragging = false));
+    canvas.addEventListener('mousedown', (e) => {
+      this.dragging = true;
+      this.downAt = { x: e.clientX, y: e.clientY };
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (this.dragging && Math.hypot(e.clientX - this.downAt.x, e.clientY - this.downAt.y) < 5) {
+        this.pendingClick = { x: e.clientX, y: e.clientY };
+      }
+      this.dragging = false;
+    });
     window.addEventListener('mousemove', (e) => {
+      this.mouse = { x: e.clientX, y: e.clientY };
       if (!this.dragging) return;
       this.mouseLook.yaw = clamp(this.mouseLook.yaw - e.movementX * 0.005, -2.6, 2.6);
       this.mouseLook.pitch = clamp(this.mouseLook.pitch - e.movementY * 0.005, -1.0, 1.4);
@@ -58,16 +75,20 @@ export class Input {
     }, { passive: false });
   }
 
-  resetForNewFlight(airborne: boolean) {
+  resetForNewFlight(kind: 'cold' | 'hot' | 'runway' | 'air') {
+    const switches = kind === 'cold' ? coldSwitches() : hotSwitches();
+    if (kind === 'hot') switches.parkingBrake = true;
     this.controls = {
-      pitch: 0, roll: 0, yaw: 0, throttle: airborne ? 0.75 : 0, brakes: 0,
-      gearDown: !airborne, speedbrake: false,
+      pitch: 0, roll: 0, yaw: 0, throttle: kind === 'air' ? 0.75 : 0, brakes: 0,
+      gearDown: kind !== 'air', speedbrake: false, switches,
     };
     this.mouseLook = { yaw: 0, pitch: 0 };
+    this.interactMode = false;
   }
 
   update(dt: number): UiActions {
-    const ui: UiActions = { pause: false, restart: false, toggleHelp: false, recenter: false };
+    const ui: UiActions = { pause: false, restart: false, toggleHelp: false, recenter: false, interactCenter: false, click: this.pendingClick, mfdPage: 0 };
+    this.pendingClick = null;
     const k = (c: string) => this.keys.has(c);
     const kp = (c: string) => this.pressedKeys.has(c);
 
@@ -113,19 +134,33 @@ export class Input {
     c.throttle = clamp(thr, 0, 1);
 
     // ---- Brakes, gear, speedbrake ----
-    c.brakes = b(BTN.A) || k('KeyB') ? 1 : 0;
+    // ---- Switch mode ----
+    if (bp(BTN.VIEW) || kp('KeyF')) this.interactMode = !this.interactMode;
+    if (this.interactMode && bp(BTN.B)) this.interactMode = false;
+    if ((this.interactMode && bp(BTN.A)) || kp('Enter')) ui.interactCenter = true;
+    if (bp(BTN.LEFT)) ui.mfdPage = -1;
+    if (bp(BTN.RIGHT) || kp('KeyM')) ui.mfdPage = 1;
+
+    c.brakes = (!this.interactMode && b(BTN.A)) || k('KeyB') ? 1 : 0;
     if (bp(BTN.Y) || kp('KeyG')) c.gearDown = !c.gearDown;
-    if (bp(BTN.B) || kp('KeyV')) c.speedbrake = !c.speedbrake;
+    if ((!this.interactMode && bp(BTN.B)) || kp('KeyV')) c.speedbrake = !c.speedbrake;
 
     // ---- Head look ----
     if (pad) {
       const rx = deadzone(pad.axes[2] ?? 0, 0.15);
       const ry = deadzone(pad.axes[3] ?? 0, 0.15);
-      // Right stick points your head: push it and you look that way, release to look ahead.
-      const ty = -rx * 2.6;
-      const tp = -ry * (ry < 0 ? 1.35 : 0.95);
-      this.padLook.yaw += (ty - this.padLook.yaw) * Math.min(1, dt * 8);
-      this.padLook.pitch += (tp - this.padLook.pitch) * Math.min(1, dt * 8);
+      if (this.interactMode) {
+        // Switch mode: the stick moves your head and the view stays put.
+        this.mouseLook.yaw = clamp(this.mouseLook.yaw + this.padLook.yaw - rx * 1.4 * dt, -2.6, 2.6);
+        this.mouseLook.pitch = clamp(this.mouseLook.pitch + this.padLook.pitch - ry * 1.0 * dt, -1.0, 1.4);
+        this.padLook.yaw = this.padLook.pitch = 0;
+      } else {
+        // Right stick points your head: push it and you look that way, release to look ahead.
+        const ty = -rx * 2.6;
+        const tp = -ry * (ry < 0 ? 1.35 : 0.95);
+        this.padLook.yaw += (ty - this.padLook.yaw) * Math.min(1, dt * 8);
+        this.padLook.pitch += (tp - this.padLook.pitch) * Math.min(1, dt * 8);
+      }
       if (b(BTN.UP)) this.look.fov = clamp(this.look.fov - 30 * dt, 30, 90);
       if (b(BTN.DOWN)) this.look.fov = clamp(this.look.fov + 30 * dt, 30, 90);
     } else {
@@ -148,7 +183,7 @@ export class Input {
     // ---- UI ----
     ui.pause = bp(BTN.MENU) || kp('Escape') || kp('KeyP');
     ui.restart = kp('KeyR');
-    ui.toggleHelp = bp(BTN.VIEW) || kp('KeyH');
+    ui.toggleHelp = kp('KeyH');
 
     this.prevButtons = pad ? pad.buttons.map((x) => x.pressed) : [];
     this.pressedKeys.clear();

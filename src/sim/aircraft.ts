@@ -25,10 +25,32 @@ export interface ControlInput {
   brakes: number; // 0..1
   gearDown: boolean;
   speedbrake: boolean;
+  switches: Switches;
 }
 
+/** Cockpit switch positions set by the pilot. */
+export interface Switches {
+  battery: boolean;
+  fuelMaster: boolean;
+  jfs: boolean; // jet fuel starter, spring-loaded: the sim reports when it drops out
+  engine: boolean; // false = fuel cutoff, true = run
+  avionics: boolean;
+  navLights: boolean;
+  canopyClosed: boolean;
+  parkingBrake: boolean;
+}
+
+export const coldSwitches = (): Switches => ({
+  battery: false, fuelMaster: false, jfs: false, engine: false, avionics: false,
+  navLights: false, canopyClosed: false, parkingBrake: true,
+});
+export const hotSwitches = (): Switches => ({
+  battery: true, fuelMaster: true, jfs: false, engine: true, avionics: true,
+  navLights: true, canopyClosed: true, parkingBrake: false,
+});
+
 export const neutralInput = (): ControlInput => ({
-  pitch: 0, roll: 0, yaw: 0, throttle: 0, brakes: 0, gearDown: true, speedbrake: false,
+  pitch: 0, roll: 0, yaw: 0, throttle: 0, brakes: 0, gearDown: true, speedbrake: false, switches: hotSwitches(),
 });
 
 export type SimEvent =
@@ -37,14 +59,26 @@ export type SimEvent =
   | { type: 'crash'; reason: string }
   | { type: 'liftoff' }
   | { type: 'gloc' }
-  | { type: 'flameout' };
+  | { type: 'flameout' }
+  | { type: 'lightoff' }
+  | { type: 'jfsOff' }
+  | { type: 'engineShutdown' }
+  | { type: 'canopyDamaged' };
 
 export interface AircraftState {
   pos: Vector3; // pilot's eye position, world meters
   vel: Vector3;
   quat: Quaternion;
-  engineRunning: boolean;
+  engineRunning: boolean; // combustion lit
+  starting: boolean; // lit but not yet at idle
   rpm: number; // 0..1, idle ~0.68
+  jfsRunning: boolean;
+  batteryPower: boolean;
+  generator: boolean;
+  avionicsPower: boolean;
+  canopyPos: number; // 0 open .. 1 closed
+  canopyBroken: boolean;
+  parkingBrake: boolean;
   afterburner: number; // 0..1
   fuel: number; // kg internal
   fuelFlow: number; // kg/s
@@ -83,15 +117,22 @@ export class Aircraft {
   static blankState(): AircraftState {
     return {
       pos: new Vector3(), vel: new Vector3(), quat: new Quaternion(),
-      engineRunning: true, rpm: 0.68, afterburner: 0, fuel: INTERNAL_FUEL, fuelFlow: 0, thrust: 0,
+      engineRunning: true, starting: false, rpm: 0.68, jfsRunning: false, batteryPower: true,
+      generator: true, avionicsPower: true, canopyPos: 1, canopyBroken: false, parkingBrake: false, afterburner: 0, fuel: INTERNAL_FUEL, fuelFlow: 0, thrust: 0,
       gearPos: 1, speedbrakePos: 0, onGround: true, damage: 0, destroyed: false,
       gLoad: 1, alpha: 0, beta: 0, gStress: 0, redStress: 0, gloc: false, time: 0,
     };
   }
 
-  /** Place on the ground at (x, z) facing headingDeg (0 = north), engine idling. */
-  resetOnGround(x: number, z: number, headingDeg: number) {
+  /** Place on the ground at (x, z) facing headingDeg (0 = north). Cold = dark, engine off, canopy open. */
+  resetOnGround(x: number, z: number, headingDeg: number, cold = false) {
     this.s = Aircraft.blankState();
+    if (cold) {
+      Object.assign(this.s, {
+        engineRunning: false, rpm: 0, batteryPower: false, generator: false, avionicsPower: false,
+        canopyPos: 0, parkingBrake: true,
+      });
+    }
     const y = this.terrain.heightAt(x, z) + EYE_HEIGHT_GEAR;
     this.s.pos.set(x, y, z);
     this.s.quat.setFromEuler(new Euler(0, -headingDeg * Math.PI / 180, 0, 'YXZ'));
@@ -149,25 +190,68 @@ export class Aircraft {
     s.alpha = speed > 5 ? Math.atan2(-vU, Math.max(vF, 0.1)) : 0;
     s.beta = speed > 5 ? Math.atan2(vR, Math.max(vF, 0.1)) : 0;
 
-    // ---------- Engine ----------
+    // ---------- Electrical and engine start ----------
+    const sw = input.switches;
+    s.generator = s.engineRunning && s.rpm > 0.6;
+    s.batteryPower = sw.battery;
+    const bus = s.batteryPower || s.generator;
+    s.avionicsPower = bus && sw.avionics;
+    s.parkingBrake = sw.parkingBrake;
+
+    // Jet fuel starter: needs battery, cranks the engine to ~25%, drops out at 55%.
+    if (sw.jfs && s.batteryPower && s.rpm < 0.55) s.jfsRunning = true;
+    if (s.jfsRunning && (!sw.jfs || !s.batteryPower || s.rpm >= 0.55)) {
+      s.jfsRunning = false;
+      events.push({ type: 'jfsOff' });
+    }
+
     const throttle = Math.min(1, Math.max(0, input.throttle));
-    if (s.fuel <= 0 && s.engineRunning) {
+    const fuelOk = sw.engine && sw.fuelMaster && s.fuel > 0;
+    if (s.engineRunning && !fuelOk) {
       s.engineRunning = false;
-      events.push({ type: 'flameout' });
+      s.starting = false;
+      events.push(s.fuel <= 0 ? { type: 'flameout' } : { type: 'engineShutdown' });
+    }
+    // Light-off once the starter (or airflow) has the core turning fast enough.
+    if (!s.engineRunning && fuelOk && s.rpm >= 0.18 && bus) {
+      s.engineRunning = true;
+      s.starting = true;
+      events.push({ type: 'lightoff' });
     }
     const milLever = Math.min(throttle / AB_DETENT, 1);
-    const rpmTarget = s.engineRunning ? 0.68 + 0.32 * milLever : 0;
-    const spool = rpmTarget > s.rpm ? 0.22 : 0.3;
+    let rpmTarget: number;
+    let spool: number;
+    if (s.engineRunning) {
+      rpmTarget = 0.68 + 0.32 * milLever;
+      if (s.starting) {
+        spool = 0.055; // slow, realistic-feeling spool to idle
+        if (s.rpm >= 0.67) s.starting = false;
+      } else spool = rpmTarget > s.rpm ? 0.22 : 0.3;
+    } else {
+      const windmill = Math.min(0.3, speed / 700);
+      rpmTarget = Math.max(s.jfsRunning ? 0.26 : 0, windmill);
+      spool = rpmTarget > s.rpm ? 0.035 : 0.06;
+    }
     s.rpm += Math.sign(rpmTarget - s.rpm) * Math.min(Math.abs(rpmTarget - s.rpm), spool * dt);
+
+    // ---------- Canopy ----------
+    const canopyTarget = sw.canopyClosed && !s.canopyBroken ? 1 : 0;
+    s.canopyPos += Math.sign(canopyTarget - s.canopyPos) * Math.min(Math.abs(canopyTarget - s.canopyPos), dt / 4);
+    if (!s.canopyBroken && s.canopyPos < 0.98 && speed > 40) {
+      s.canopyBroken = true;
+      s.canopyPos = 0;
+      s.damage = Math.min(100, s.damage + 25);
+      events.push({ type: 'canopyDamaged' });
+    }
     const wantAB = s.engineRunning && throttle > AB_DETENT + 0.01 && s.rpm > 0.97;
     const abTarget = wantAB ? 0.3 + 0.7 * (throttle - AB_DETENT) / (1 - AB_DETENT) : 0;
     s.afterburner += (abTarget - s.afterburner) * Math.min(1, dt * 3);
     const core = Math.max(0, (s.rpm - 0.68) / 0.32);
     const lapse = Math.pow(rho / 1.225, 0.75);
-    s.thrust = s.engineRunning
+    s.thrust = s.engineRunning && !s.starting
       ? (MIL_THRUST * (0.05 + 0.95 * Math.pow(core, 1.5)) + (AB_THRUST - MIL_THRUST) * s.afterburner) * lapse
       : 0;
-    s.fuelFlow = s.engineRunning ? 0.07 + 1.05 * Math.pow(core, 1.3) + 4.6 * s.afterburner : 0;
+    s.fuelFlow = s.engineRunning ? (s.starting ? 0.05 : 0) + 0.07 + 1.05 * Math.pow(core, 1.3) + 4.6 * s.afterburner : 0;
     s.fuel = Math.max(0, s.fuel - s.fuelFlow * dt);
 
     // ---------- Gear and speedbrake ----------
@@ -319,7 +403,8 @@ export class Aircraft {
     // Rolling friction and wheel brakes, scaled by weight still on the wheels.
     const liftFrac = clamp((q * WING_AREA * CL_ALPHA * Math.max(pitch, 0)) / (this.mass * G), 0, 1);
     const onWheels = 1 - liftFrac;
-    const decel = (0.25 + input.brakes * 5.5) * onWheels * dt;
+    const brakes = Math.max(input.brakes, s.parkingBrake ? 1 : 0);
+    const decel = (0.25 + brakes * 5.5) * onWheels * dt;
     if (Math.abs(along) <= decel) along = 0;
     else along -= Math.sign(along) * decel;
 
