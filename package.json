@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node tools/inline.mjs",
     "preview": "vite preview",
-    "flight-check": "esbuild tools/flight-check.ts --bundle --platform=node --outfile=dist/flight-check.cjs --log-level=error && node dist/flight-check.cjs"
+    "flight-check": "esbuild tools/flight-check.ts --bundle --platform=node --format=esm --outfile=dist/flight-check.mjs --log-level=error && node dist/flight-check.mjs"
   },
   "dependencies": {
     "three": "0.170.0"

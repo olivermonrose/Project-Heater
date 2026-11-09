@@ -25,6 +25,10 @@ export class Hud {
     this.canvas.style.height = h + 'px';
   }
 
+  clear() {
+    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+  }
+
   resetMaxG() {
     this.maxG = 1;
   }
