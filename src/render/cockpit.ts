@@ -5,9 +5,12 @@ import { RUNWAY, TERRAIN_SIZE, Terrain, BASE_ELEV } from '../sim/terrain';
 import { APRON, TAXIWAYS } from './world';
 import { SwitchPanel } from './switches';
 import { checklist } from '../checklist';
+import { SITES } from '../sim/combat';
 
 export type LeftPage = 'CHK' | 'ENG';
 const LEFT_PAGES: LeftPage[] = ['CHK', 'ENG'];
+export type RightPage = 'NAV' | 'TGP';
+const RIGHT_PAGES: RightPage[] = ['NAV', 'TGP'];
 
 // Original low-poly cockpit for the fictional KR-7 Kestrel.
 // Units are meters, the pilot's eye is at the origin, -Z is forward.
@@ -25,6 +28,11 @@ export class Cockpit {
   private stick: THREE.Object3D;
   private leftMfd: Mfd;
   private rightMfd: Mfd;
+  private rightCanvasMat: THREE.Material;
+  private tgpMaterial: THREE.Material | null = null;
+  rightPage: RightPage = 'NAV';
+  /** Bomb meshes hanging under the wings, hidden as they are released. */
+  private stores: THREE.Mesh[] = [];
   private ufc: Mfd;
   private mfdTimer = 0;
   private mapImage: HTMLCanvasElement;
@@ -63,6 +71,7 @@ export class Cockpit {
     this.rightMfd = new Mfd(0.155);
     this.rightMfd.mesh.position.set(0.235, -0.04, 0.005);
     panel.add(this.rightMfd.mesh);
+    this.rightCanvasMat = this.rightMfd.mesh.material as THREE.Material;
     this.ufc = new Mfd(0.12, 0.08, 256, 170);
     this.ufc.mesh.position.set(0, 0.09, 0.005);
     panel.add(this.ufc.mesh);
@@ -147,9 +156,28 @@ export class Cockpit {
     }
     this.strobe = add(lightGeo, new THREE.MeshBasicMaterial({ color: 0x222222 }), 0, 1.95, 7.6);
 
+    // Four guided bombs on the wing pylons (visible when you look out at the wings).
+    const bombGeo = new THREE.CylinderGeometry(0.18, 0.18, 2.3, 8);
+    bombGeo.rotateX(Math.PI / 2);
+    const bombMat = lam(0x5f6656);
+    for (const x of [-3.0, -2.0, 2.0, 3.0]) {
+      const m = add(bombGeo, bombMat, x, -1.15, 3.6);
+      this.stores.push(m);
+    }
+
     this.switches = new SwitchPanel(this.root, panel);
 
     this.mapImage = buildMapImage(terrain);
+  }
+
+  setTgpMaterial(m: THREE.Material) {
+    this.tgpMaterial = m;
+  }
+
+  setStores(lgbLeft: number) {
+    // Release order alternates wings from the outboard pylons inward.
+    const order = [0, 3, 1, 2];
+    this.stores.forEach((m, i) => (m.visible = order.indexOf(i) >= 4 - lgbLeft));
   }
 
   update(dt: number, s: AircraftState, input: ControlInput, look: { yaw: number; pitch: number; fov: number }) {
@@ -178,9 +206,13 @@ export class Cockpit {
       if (s.avionicsPower) {
         if (this.leftPage === 'ENG') drawEnginePage(this.leftMfd, s, input);
         else drawChecklistPage(this.leftMfd, s, input, this.hasFlown);
-        drawNavPage(this.rightMfd, s, this.mapImage);
+        if (this.rightPage === 'NAV') {
+          drawNavPage(this.rightMfd, s, this.mapImage);
+          this.rightMfd.mesh.material = this.rightCanvasMat;
+        } else if (this.tgpMaterial) this.rightMfd.mesh.material = this.tgpMaterial;
         this.powered = true;
       } else if (this.powered) {
+        this.rightMfd.mesh.material = this.rightCanvasMat;
         for (const m of [this.leftMfd, this.rightMfd]) {
           m.ctx.fillStyle = '#020303';
           m.ctx.fillRect(0, 0, 256, 256);
@@ -190,6 +222,12 @@ export class Cockpit {
       }
       drawUfc(this.ufc, s, input);
     }
+  }
+
+  cycleRightPage() {
+    const i = RIGHT_PAGES.indexOf(this.rightPage);
+    this.rightPage = RIGHT_PAGES[(i + 1) % RIGHT_PAGES.length];
+    this.mfdTimer = 0;
   }
 
   cycleLeftPage(dir: number) {
@@ -372,7 +410,7 @@ function buildMapImage(terrain: Terrain) {
 }
 
 function drawNavPage(m: Mfd, s: AircraftState, map: HTMLCanvasElement) {
-  frame(m, 'NAV  NORTH UP  40 NM', ['NAV'], 'NAV');
+  frame(m, 'NAV  NORTH UP  40 NM', ['NAV', 'TGP'], 'NAV');
   const g = m.ctx;
   const area = { x: 8, y: 24, w: 240, h: 212 };
   g.save();
@@ -406,6 +444,20 @@ function drawNavPage(m: Mfd, s: AircraftState, map: HTMLCanvasElement) {
   g.font = '11px monospace';
   [x1, y1] = toScreen(RUNWAY.x, 0);
   g.fillText('HOME', x1 + 8, y1);
+  // Target areas.
+  g.strokeStyle = RED;
+  g.fillStyle = RED;
+  g.lineWidth = 2;
+  for (const site of SITES) {
+    [x1, y1] = toScreen(site.x, site.z);
+    g.beginPath();
+    g.moveTo(x1, y1 - 7);
+    g.lineTo(x1 + 6, y1 + 5);
+    g.lineTo(x1 - 6, y1 + 5);
+    g.closePath();
+    g.stroke();
+    g.fillText(site.name, x1 + 9, y1 + 4);
+  }
   // Range rings.
   g.strokeStyle = 'rgba(125,255,158,0.35)';
   for (const nm of [10, 20]) {

@@ -77,11 +77,27 @@ function buildTerrainMesh(terrain: Terrain) {
 }
 
 function buildOuterGround() {
-  const geo = new THREE.PlaneGeometry(400000, 400000);
+  // A flat apron of desert around the terrain tile, with a square hole so it
+  // never covers low ground inside the map.
+  const R = 200000;
+  const h = TERRAIN_SIZE / 2 - CELL; // overlap the tile's flat edge slightly
+  const shape = new THREE.Shape();
+  shape.moveTo(-R, -R);
+  shape.lineTo(R, -R);
+  shape.lineTo(R, R);
+  shape.lineTo(-R, R);
+  shape.closePath();
+  const hole = new THREE.Path();
+  hole.moveTo(-h, -h);
+  hole.lineTo(-h, h);
+  hole.lineTo(h, h);
+  hole.lineTo(h, -h);
+  hole.closePath();
+  shape.holes.push(hole);
+  const geo = new THREE.ShapeGeometry(shape);
   geo.rotateX(-Math.PI / 2);
-  // Leave a hole-free plane slightly below the terrain edge height.
   const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xcfb084 }));
-  m.position.y = BASE_ELEV - 2;
+  m.position.y = BASE_ELEV - 0.5;
   return m;
 }
 

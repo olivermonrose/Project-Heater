@@ -1,4 +1,5 @@
 import { ControlInput, CONSTANTS, coldSwitches, hotSwitches } from '../sim/aircraft';
+import { CombatActions, noActions, SITES } from '../sim/combat';
 
 // Standard gamepad mapping (Xbox Series / Elite controllers on macOS browsers).
 const BTN = { A: 0, B: 1, X: 2, Y: 3, LB: 4, RB: 5, LT: 6, RT: 7, VIEW: 8, MENU: 9, LS: 10, RS: 11, UP: 12, DOWN: 13, LEFT: 14, RIGHT: 15 };
@@ -16,7 +17,9 @@ export interface UiActions {
   recenter: boolean;
   interactCenter: boolean; // press whatever switch is under the centre reticle
   click: { x: number; y: number } | null; // mouse click in CSS pixels
-  mfdPage: number; // -1 / +1 to cycle the left MFD page
+  leftPage: boolean; // cycle the left MFD page
+  rightPage: boolean; // cycle the right MFD page
+  togglePip: boolean; // big picture-in-picture pod view
 }
 
 function deadzone(v: number, dz = 0.12) {
@@ -31,6 +34,14 @@ export class Input {
   /** Switch mode: the right stick moves your head and leaves it there, A presses the switch under the reticle. */
   interactMode = false;
   mouse = { x: -1, y: -1 };
+  /** Pod mode: the right stick slews the targeting pod instead of your head. */
+  tgpMode = false;
+  /** Weapon and pod commands for this frame. */
+  combat: CombatActions = noActions();
+  /** Fire button held / just pressed (A in the air, Space on the keyboard). */
+  fireHeld = false;
+  firePressed = false;
+  private siteIndex = 0;
   look: LookInput = { yaw: 0, pitch: 0, fov: 70 };
   gamepadName = '';
   invertPitch = false;
@@ -78,16 +89,20 @@ export class Input {
   resetForNewFlight(kind: 'cold' | 'hot' | 'runway' | 'air') {
     const switches = kind === 'cold' ? coldSwitches() : hotSwitches();
     if (kind === 'hot') switches.parkingBrake = true;
+    if (kind === 'air') switches.masterArm = true;
     this.controls = {
       pitch: 0, roll: 0, yaw: 0, throttle: kind === 'air' ? 0.75 : 0, brakes: 0,
       gearDown: kind !== 'air', speedbrake: false, switches,
     };
     this.mouseLook = { yaw: 0, pitch: 0 };
     this.interactMode = false;
+    this.tgpMode = false;
   }
 
   update(dt: number): UiActions {
-    const ui: UiActions = { pause: false, restart: false, toggleHelp: false, recenter: false, interactCenter: false, click: this.pendingClick, mfdPage: 0 };
+    const ui: UiActions = { pause: false, restart: false, toggleHelp: false, recenter: false, interactCenter: false, click: this.pendingClick, leftPage: false, rightPage: false, togglePip: false };
+    const act = noActions();
+    this.combat = act;
     this.pendingClick = null;
     const k = (c: string) => this.keys.has(c);
     const kp = (c: string) => this.pressedKeys.has(c);
@@ -134,12 +149,41 @@ export class Input {
     c.throttle = clamp(thr, 0, 1);
 
     // ---- Brakes, gear, speedbrake ----
-    // ---- Switch mode ----
-    if (bp(BTN.VIEW) || kp('KeyF')) this.interactMode = !this.interactMode;
+    // ---- Switch mode and pod mode ----
+    if (bp(BTN.VIEW) || kp('KeyF')) {
+      this.interactMode = !this.interactMode;
+      if (this.interactMode) this.tgpMode = false;
+    }
     if (this.interactMode && bp(BTN.B)) this.interactMode = false;
+    if (bp(BTN.X) || kp('KeyT')) {
+      this.tgpMode = !this.tgpMode;
+      if (this.tgpMode) this.interactMode = false;
+    }
     if ((this.interactMode && bp(BTN.A)) || kp('Enter')) ui.interactCenter = true;
-    if (bp(BTN.LEFT)) ui.mfdPage = -1;
-    if (bp(BTN.RIGHT) || kp('KeyM')) ui.mfdPage = 1;
+    if (this.tgpMode) {
+      if (bp(BTN.UP) || kp('BracketRight')) act.zoom = 1;
+      if (bp(BTN.DOWN) || kp('BracketLeft')) act.zoom = -1;
+      if (bp(BTN.LEFT)) {
+        act.cueToSite = SITES[this.siteIndex % SITES.length].name;
+        this.siteIndex++;
+      }
+      if (bp(BTN.RIGHT)) ui.togglePip = true;
+      if (bp(BTN.RS)) act.lockToggle = true;
+    } else {
+      if (bp(BTN.LEFT)) ui.leftPage = true;
+      if (bp(BTN.RIGHT)) ui.rightPage = true;
+    }
+    if (kp('KeyM')) ui.leftPage = true;
+    if (kp('Comma')) ui.rightPage = true;
+    if (kp('KeyO')) ui.togglePip = true;
+    if (kp('KeyU')) act.lockToggle = true;
+    for (let i = 0; i < SITES.length; i++) if (kp(`Digit${i + 1}`)) act.cueToSite = SITES[i].name;
+    if (bp(BTN.LS) || kp('KeyX')) act.weaponCycle = true;
+    // Keyboard pod slew with I/J/K/L works any time.
+    act.slewX = (k('KeyL') ? 1 : 0) - (k('KeyJ') ? 1 : 0);
+    act.slewY = (k('KeyI') ? 1 : 0) - (k('KeyK') ? 1 : 0);
+    this.fireHeld = (!this.interactMode && b(BTN.A)) || k('Space');
+    this.firePressed = (!this.interactMode && bp(BTN.A)) || kp('Space');
 
     c.brakes = (!this.interactMode && b(BTN.A)) || k('KeyB') ? 1 : 0;
     if (bp(BTN.Y) || kp('KeyG')) c.gearDown = !c.gearDown;
@@ -149,7 +193,15 @@ export class Input {
     if (pad) {
       const rx = deadzone(pad.axes[2] ?? 0, 0.15);
       const ry = deadzone(pad.axes[3] ?? 0, 0.15);
-      if (this.interactMode) {
+      if (this.tgpMode) {
+        // Pod mode: the right stick slews the pod, the head eases back to centre.
+        if (rx || ry) {
+          act.slewX = expo(rx, 1.5);
+          act.slewY = expo(-ry, 1.5);
+        }
+        this.padLook.yaw *= Math.max(0, 1 - dt * 8);
+        this.padLook.pitch *= Math.max(0, 1 - dt * 8);
+      } else if (this.interactMode) {
         // Switch mode: the stick moves your head and the view stays put.
         this.mouseLook.yaw = clamp(this.mouseLook.yaw + this.padLook.yaw - rx * 1.4 * dt, -2.6, 2.6);
         this.mouseLook.pitch = clamp(this.mouseLook.pitch + this.padLook.pitch - ry * 1.0 * dt, -1.0, 1.4);
@@ -161,8 +213,8 @@ export class Input {
         this.padLook.yaw += (ty - this.padLook.yaw) * Math.min(1, dt * 8);
         this.padLook.pitch += (tp - this.padLook.pitch) * Math.min(1, dt * 8);
       }
-      if (b(BTN.UP)) this.look.fov = clamp(this.look.fov - 30 * dt, 30, 90);
-      if (b(BTN.DOWN)) this.look.fov = clamp(this.look.fov + 30 * dt, 30, 90);
+      if (!this.tgpMode && b(BTN.UP)) this.look.fov = clamp(this.look.fov - 30 * dt, 30, 90);
+      if (!this.tgpMode && b(BTN.DOWN)) this.look.fov = clamp(this.look.fov + 30 * dt, 30, 90);
     } else {
       this.padLook.yaw = this.padLook.pitch = 0;
     }
@@ -172,7 +224,7 @@ export class Input {
     if (k('ArrowDown')) this.mouseLook.pitch = clamp(this.mouseLook.pitch - 1.2 * dt, -1.0, 1.4);
     if (k('Equal')) this.look.fov = clamp(this.look.fov - 30 * dt, 30, 90);
     if (k('Minus')) this.look.fov = clamp(this.look.fov + 30 * dt, 30, 90);
-    if (bp(BTN.RS) || kp('KeyC')) {
+    if ((!this.tgpMode && bp(BTN.RS)) || kp('KeyC')) {
       this.mouseLook = { yaw: 0, pitch: 0 };
       this.look.fov = 70;
       ui.recenter = true;

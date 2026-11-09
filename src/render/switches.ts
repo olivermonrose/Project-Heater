@@ -39,6 +39,8 @@ export const SWITCHES: SwitchDef[] = [
     get: (c) => c.gearDown, toggle: (c) => (c.gearDown = !c.gearDown) },
   { id: 'parkingBrake', label: 'PARK BRAKE', onText: 'SET', offText: 'OFF', parent: 'panel', pos: [0.372, -0.07, 0.006], onIsCaution: true,
     get: (c) => c.switches.parkingBrake, toggle: (c) => (c.switches.parkingBrake = !c.switches.parkingBrake) },
+  { id: 'masterArm', label: 'MASTER ARM', onText: 'ARM', offText: 'SAFE', parent: 'panel', pos: [0.372, 0.1, 0.006], onIsCaution: true,
+    get: (c) => c.switches.masterArm, toggle: (c) => (c.switches.masterArm = !c.switches.masterArm) },
 ];
 
 const PLATE_W = 0.068;

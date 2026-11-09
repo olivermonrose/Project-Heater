@@ -38,15 +38,16 @@ export interface Switches {
   navLights: boolean;
   canopyClosed: boolean;
   parkingBrake: boolean;
+  masterArm: boolean;
 }
 
 export const coldSwitches = (): Switches => ({
   battery: false, fuelMaster: false, jfs: false, engine: false, avionics: false,
-  navLights: false, canopyClosed: false, parkingBrake: true,
+  navLights: false, canopyClosed: false, parkingBrake: true, masterArm: false,
 });
 export const hotSwitches = (): Switches => ({
   battery: true, fuelMaster: true, jfs: false, engine: true, avionics: true,
-  navLights: true, canopyClosed: true, parkingBrake: false,
+  navLights: true, canopyClosed: true, parkingBrake: false, masterArm: false,
 });
 
 export const neutralInput = (): ControlInput => ({
@@ -152,8 +153,12 @@ export class Aircraft {
     this.wasOnGround = false;
   }
 
+  /** Weapons hanging on the jet: mass (kg) and extra drag coefficient. */
+  storesMass = 0;
+  storesDrag = 0;
+
   get mass() {
-    return DRY_MASS + this.s.fuel;
+    return DRY_MASS + this.s.fuel + this.storesMass;
   }
 
   /** Heading (deg, 0..360), pitch (deg), bank (deg, right positive). */
@@ -274,7 +279,7 @@ export class Aircraft {
     cl += flaps;
     // Transonic drag rise, easing off again once supersonic.
     const wave = 0.03 * smooth(0.85, 1.08, mach) - 0.008 * smooth(1.2, 2.0, mach);
-    const cd = 0.024 + 0.115 * cl * cl + 0.03 * s.gearPos + 0.07 * s.speedbrakePos + wave;
+    const cd = 0.024 + 0.115 * cl * cl + 0.03 * s.gearPos + 0.07 * s.speedbrakePos + wave + this.storesDrag;
 
     const force = new Vector3();
     // Lift acts perpendicular to the velocity, toward the canopy.
