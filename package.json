@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build && node tools/inline.mjs",
     "preview": "vite preview",
+    "top-speed": "esbuild tools/top-speed.ts --bundle --platform=node --format=esm --outfile=dist/top-speed.mjs --log-level=error && node dist/top-speed.mjs",
     "flight-check": "esbuild tools/flight-check.ts --bundle --platform=node --format=esm --outfile=dist/flight-check.mjs --log-level=error && node dist/flight-check.mjs"
   },
   "dependencies": {

@@ -247,9 +247,13 @@ export class Aircraft {
     const abTarget = wantAB ? 0.3 + 0.7 * (throttle - AB_DETENT) / (1 - AB_DETENT) : 0;
     s.afterburner += (abTarget - s.afterburner) * Math.min(1, dt * 3);
     const core = Math.max(0, (s.rpm - 0.68) / 0.32);
-    const lapse = Math.pow(rho / 1.225, 0.75);
+    // Thrust falls with air density but ram air recovers some of it at speed,
+    // especially in afterburner. That is what lets the jet reach Mach 2 up high.
+    const lapse = Math.pow(rho / 1.225, 0.7);
+    const milRam = 1 + 0.17 * Math.min(mach, 2.2);
+    const abRam = 1 + 0.115 * Math.pow(Math.min(mach, 2.2), 2.5);
     s.thrust = s.engineRunning && !s.starting
-      ? (MIL_THRUST * (0.05 + 0.95 * Math.pow(core, 1.5)) + (AB_THRUST - MIL_THRUST) * s.afterburner) * lapse
+      ? (MIL_THRUST * (0.05 + 0.95 * Math.pow(core, 1.5)) * milRam + (AB_THRUST - MIL_THRUST) * s.afterburner * abRam) * lapse
       : 0;
     s.fuelFlow = s.engineRunning ? (s.starting ? 0.05 : 0) + 0.07 + 1.05 * Math.pow(core, 1.3) + 4.6 * s.afterburner : 0;
     s.fuel = Math.max(0, s.fuel - s.fuelFlow * dt);
@@ -268,7 +272,8 @@ export class Aircraft {
     if (Math.abs(a) < stallA) cl = CL_ALPHA * a;
     else cl = Math.sign(a) * CL_ALPHA * stallA * Math.max(0.35, 1 - (Math.abs(a) - stallA) * 2);
     cl += flaps;
-    const wave = 0.075 * smooth(0.82, 1.08, mach) - 0.02 * smooth(1.2, 1.8, mach);
+    // Transonic drag rise, easing off again once supersonic.
+    const wave = 0.03 * smooth(0.85, 1.08, mach) - 0.008 * smooth(1.2, 2.0, mach);
     const cd = 0.024 + 0.115 * cl * cl + 0.03 * s.gearPos + 0.07 * s.speedbrakePos + wave;
 
     const force = new Vector3();
@@ -382,7 +387,7 @@ export class Aircraft {
     if (n > 10.5 || n < -4.5) s.damage += (Math.abs(n) - (n > 0 ? 10.5 : 4.5)) * 25 * dt;
     const kts = speed * 1.944;
     if (s.gearPos > 0.05 && kts > 320 && !s.onGround) s.damage += (kts - 320) * 0.15 * dt;
-    if (mach > 1.6) s.damage += (mach - 1.6) * 40 * dt;
+    if (mach > 2.05) s.damage += (mach - 2.05) * 60 * dt;
     if (s.damage >= 100) this.crash(events, 'Airframe destroyed by overstress');
   }
 
