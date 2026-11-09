@@ -7,6 +7,16 @@ import { Terrain } from '../sim/terrain';
 // and are clipped to the combiner glass.
 
 const DEG = Math.PI / 180;
+
+/** Weapon symbology for the HUD. */
+export interface HudCombat {
+  armed: boolean;
+  weaponText: string;
+  tdPoint: THREE.Vector3 | null; // target designator: where the pod is looking
+  inRange: boolean | null; // guided bomb release cue (null when not applicable)
+  pipper: THREE.Vector3 | null; // gun impact point
+  bombTof: number | null;
+}
 const COLOR = 'rgba(110, 255, 150, 0.95)';
 
 export class Hud {
@@ -33,7 +43,7 @@ export class Hud {
     this.maxG = 1;
   }
 
-  draw(dt: number, camera: THREE.PerspectiveCamera, corners: THREE.Vector3[], s: AircraftState, attitude: { heading: number; pitch: number; bank: number }, terrain: Terrain) {
+  draw(dt: number, camera: THREE.PerspectiveCamera, corners: THREE.Vector3[], s: AircraftState, attitude: { heading: number; pitch: number; bank: number }, terrain: Terrain, combat?: HudCombat) {
     const g = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
     g.clearRect(0, 0, W, H);
@@ -203,6 +213,35 @@ export class Hud {
       g.lineTo(caret.x + scale * 0.35, caret.y);
       g.closePath();
       g.stroke();
+    }
+
+    // ---- Weapons ----
+    if (combat) {
+      textAt(-8.0, -9.0, combat.armed ? combat.weaponText : 'SAFE');
+      if (combat.tdPoint) {
+        // Target designator box where the pod is looking.
+        const td = projPoint(combat.tdPoint);
+        if (td) {
+          const r = scale * 0.6;
+          g.strokeRect(td.x - r, td.y - r, r * 2, r * 2);
+        }
+      }
+      if (combat.inRange !== null && combat.armed) {
+        g.font = `bold ${Math.round(scale * 0.9)}px Menlo, monospace`;
+        textAt(0, 4.6, combat.inRange ? 'IN RNG  PICKLE' : 'OUT RNG', 'center');
+        g.font = `${Math.round(scale * 0.8)}px "SF Mono", Menlo, monospace`;
+      }
+      if (combat.bombTof !== null) textAt(4.3, -6.6, `TOF ${Math.round(combat.bombTof)}`);
+      if (combat.pipper && combat.armed) {
+        const pp = projPoint(combat.pipper);
+        if (pp) {
+          g.beginPath();
+          g.arc(pp.x, pp.y, scale * 0.9, 0, Math.PI * 2);
+          g.moveTo(pp.x + 1.5, pp.y);
+          g.arc(pp.x, pp.y, 1.5, 0, Math.PI * 2);
+          g.stroke();
+        }
+      }
     }
 
     // ---- Warnings ----

@@ -21,18 +21,21 @@ Plug in an Xbox controller (wired Elite Series 2 works) and press any button.
 | Right stick | Look around the cockpit; release to look ahead. Click to reset |
 | A (hold) | Wheel brakes |
 | View button | Switch mode: right stick moves your head and the view stays, A presses the switch under the dot, B exits |
-| D-pad left / right | Left screen page (checklist / engine) |
+| D-pad left / right | Left / right screen page |
 | Y / B | Landing gear / speedbrake |
+| A in the air | Drop a bomb / fire the gun (MASTER ARM must be ARM) |
+| X | Pod mode: right stick slews the pod, click it to lock, D-pad up/down zoom, left next target area, right big pod view, X again exits |
+| Left stick click | Change weapon (guided bombs / gun) |
 | D-pad up / down | Zoom |
 | Menu | Pause |
 
-Keyboard and trackpad: click switches directly (or F for switch mode and Enter to press), M changes the left screen page, W/S pitch, A/D roll, Q/E rudder, Shift/Ctrl throttle, B brakes, G gear, V speedbrake, drag or arrows to look, C reset view, Esc pause, R restart.
+Keyboard and trackpad: click switches directly (or F for switch mode and Enter to press), M / comma change the left / right screen page, Space fires, T pod mode, I J K L slew the pod, U lock, [ ] pod zoom, O big pod view, 1-3 cue a target area, X change weapon, W/S pitch, A/D roll, Q/E rudder, Shift/Ctrl throttle, B brakes, G gear, V speedbrake, drag or arrows to look, C reset view, Esc pause, R restart.
 
 ## Roadmap
 
 1. **Flight, cockpit and airfield**: flight model with fly-by-wire G and AoA limits, stall, blackout/G-LOC, fuel burn, gear and brakes, taxi/takeoff/landing, look-around cockpit, collimated HUD, ENG and NAV MFD pages, damage gauge.
-2. **Cold start and shutdown** (this increment): battery, fuel master, jet fuel starter, engine light-off and spool, generator, avionics power, nav lights, canopy, parking brake. Clickable switches, a checklist MFD page that ticks itself off, and a flight debrief after a full shutdown.
-3. **Targeting pod and ground attack**: TGP camera on an MFD, slew and lock ground targets, guided and unguided bombs.
+2. **Cold start and shutdown**: battery, fuel master, jet fuel starter, engine light-off and spool, generator, avionics power, nav lights, canopy, parking brake. Clickable switches, a checklist MFD page that ticks itself off, and a flight debrief after a full shutdown.
+3. **Targeting pod and ground attack** (this increment): an infrared pod camera on the right MFD (or a big picture-in-picture view), slew, zoom, point and area track, four laser-guided bombs, a 510-round gun with a HUD pipper, and three target areas (supply depot, armor column, SAM site) marked on the NAV page.
 4. **Threats and countermeasures**: SAM sites, AAA, radar warning receiver, chaff and flares.
 5. **Air-to-air**: radar page, IR and radar missiles, gun, enemy fighter AI.
 6. **Standalone missions**, then **online multiplayer**, then night mode.
@@ -43,9 +46,18 @@ Choose **Cold start on the ramp** and follow the CHECKLIST page on the left scre
 BATTERY on, FUEL MASTER on, JFS start, wait for 20% RPM, ENGINE run, wait for idle (68%) and the generator,
 AVIONICS on, NAV LIGHTS on, CANOPY close, PARK BRAKE off. After landing, the same page shows the shutdown list.
 
+## First bombing run
+
+1. Air start, flip **MASTER ARM** to ARM (it is already armed on an air start).
+2. Press **X** for pod mode. The pod starts on target area A (supply depot); D-pad left cycles A, B, C.
+3. Zoom in with D-pad up, slew the crosshair onto a target with the right stick, click the stick to lock (POINT).
+4. Fly toward it. When the HUD says **IN RNG PICKLE**, press **A**. Keep the pod on the target until impact (watch TOF); don't fly so far past it that the pod is MASKED.
+5. For the gun, click the left stick to pick GUN, dive at a target and put the HUD pipper on it.
+
 ## Code layout
 
 - `src/sim/` pure simulation (terrain, flight model). No rendering, so it can also run on a multiplayer server later.
 - `src/render/` Three.js world, cockpit, MFDs and HUD.
 - `src/input/` controller and keyboard mapping.
+- `npm run bomb-check` flies a guided-bomb attack and a gun pass against the targets; `npm run top-speed` reports top speed by altitude.
 - `npm run flight-check` runs a scripted takeoff, 9 G pull and landing against the flight model.

@@ -7,6 +7,10 @@ import { Cockpit } from './render/cockpit';
 import { Hud } from './render/hud';
 import { EngineAudio } from './audio';
 import { checklist } from './checklist';
+import { Combat, CombatEvent, SITES } from './sim/combat';
+import { TargetsView } from './render/targets3d';
+import { TgpView } from './render/tgp';
+import { HudCombat } from './render/hud';
 
 const SIM_HZ = 120;
 
@@ -33,11 +37,18 @@ const cockpit = new Cockpit(terrain);
 scene.add(cockpit.root);
 const hud = new Hud(hudCanvas);
 const input = new Input(glCanvas);
+const combat = new Combat(terrain);
+const targetsView = new TargetsView(terrain);
+scene.add(targetsView.group);
+const tgpView = new TgpView();
+cockpit.setTgpMaterial(tgpView.material);
+let pipOn = false;
+let wasTgpMode = false;
 const audio = new EngineAudio();
 
 type StartKind = 'cold' | 'hot' | 'runway' | 'air';
 let lastStart: StartKind = 'cold';
-const stats = { liftoffAt: -1, flightTime: 0, maxG: 1, fuelStart: 0, landings: 0, debriefShown: false };
+const stats = { liftoffAt: -1, flightTime: 0, maxG: 1, fuelStart: 0, landings: 0, debriefShown: false, kills: 0 };
 let paused = true;
 let started = false;
 let msgTimer = 0;
@@ -65,9 +76,13 @@ function startFlight(kind: StartKind) {
   else if (kind === 'runway') aircraft.resetOnGround(RUNWAY_START.x, RUNWAY_START.z, RUNWAY_START.heading);
   else aircraft.resetInAir(-6000, 300 + 8000 / 3.281, 9000, 20, 160);
   input.resetForNewFlight(kind);
+  combat.reset();
+  targetsView.rebuild(combat);
+  pipOn = false;
+  cockpit.rightPage = 'NAV';
   cockpit.leftPage = kind === 'cold' ? 'CHK' : 'ENG';
   cockpit.hasFlown = kind === 'air';
-  Object.assign(stats, { liftoffAt: kind === 'air' ? 0 : -1, flightTime: 0, maxG: 1, fuelStart: aircraft.s.fuel, landings: 0, debriefShown: false });
+  Object.assign(stats, { liftoffAt: kind === 'air' ? 0 : -1, flightTime: 0, maxG: 1, fuelStart: aircraft.s.fuel, landings: 0, debriefShown: false, kills: 0 });
   debrief.style.display = 'none';
   hud.resetMaxG();
   restartCountdown = -1;
@@ -113,6 +128,19 @@ function menuPad() {
   menuPrev = pad.buttons.map((b) => b.pressed);
   menuPrev[99] = ax > 0.6;
   menuPrev[98] = ax < -0.6;
+}
+
+function handleCombatEvents(events: CombatEvent[]) {
+  targetsView.onEvents(events);
+  for (const e of events) {
+    if (e.type === 'targetDestroyed') {
+      stats.kills++;
+      const site = SITES.find((x) => x.name === e.target.site);
+      const name = e.target.kind.replace(/([A-Z])/g, ' $1').toUpperCase();
+      showMessage(`${name} destroyed at ${site?.label ?? 'target area'}. ${combat.liveCount()} targets left`, 4);
+    } else if (e.type === 'cantFire') showMessage(`Can't fire: ${e.reason}`, 2.5);
+    else if (e.type === 'release') showMessage('Bomb away. Keep the pod on the target until impact', 3);
+  }
 }
 
 function handleEvents(events: SimEvent[]) {
@@ -168,6 +196,8 @@ function showDebrief() {
       <tr><td>Landings</td><td>${stats.landings}</td></tr>
       <tr><td>Max G</td><td>${stats.maxG.toFixed(1)}</td></tr>
       <tr><td>Fuel used</td><td>${Math.round(used).toLocaleString()} lb</td></tr>
+      <tr><td>Targets destroyed</td><td>${stats.kills} of ${combat.targets.length}</td></tr>
+      <tr><td>Bombs / rounds left</td><td>${combat.lgbLeft} / ${combat.gunLeft}</td></tr>
       <tr><td>Damage</td><td>${Math.round(s.damage)}%</td></tr>
     </table>
     <div class="buttons" style="margin-top:18px"><button id="dbAgain">Fly again</button><button id="dbMenu">Main menu</button></div></div>`;
@@ -200,7 +230,14 @@ function frame(now: number) {
     const ui = input.update(dt);
     if (ui.pause) setPaused(true);
     if (ui.restart) startFlight(lastStart);
-    if (ui.mfdPage) cockpit.cycleLeftPage(ui.mfdPage);
+    if (ui.leftPage) cockpit.cycleLeftPage(1);
+    if (ui.rightPage) cockpit.cycleRightPage();
+    if (ui.togglePip) pipOn = !pipOn;
+    if (input.tgpMode && !wasTgpMode) {
+      cockpit.rightPage = 'TGP';
+      showMessage('POD MODE: right stick slews, click it to lock. D-pad up/down zoom, left next target area, right big view. X exits', 7);
+    }
+    wasTgpMode = input.tgpMode;
 
     // Cockpit switches: hover with the mouse or the centre reticle, click or press A.
     const w = window.innerWidth, h = window.innerHeight;
@@ -229,11 +266,21 @@ function frame(now: number) {
     acc += dt;
     const step = 1 / SIM_HZ;
     events.length = 0;
+    const airborne = !aircraft.s.onGround;
+    const act = { ...input.combat, pickle: input.firePressed && airborne, trigger: input.fireHeld && airborne };
+    const cevents: CombatEvent[] = [];
+    let first = true;
     while (acc >= step) {
+      aircraft.storesMass = combat.storesMass;
+      aircraft.storesDrag = combat.lgbLeft * 0.0025;
       aircraft.step(step, input.controls, events);
+      const a = first ? act : { ...act, lockToggle: false, zoom: 0, weaponCycle: false, pickle: false, cueToSite: null };
+      combat.step(step, aircraft.s, a, input.controls.switches.masterArm, aircraft.s.avionicsPower, cevents);
+      first = false;
       acc -= step;
     }
     handleEvents(events);
+    handleCombatEvents(cevents);
     const st = aircraft.s;
     stats.maxG = Math.max(stats.maxG, st.gLoad);
     if (!st.onGround && stats.liftoffAt >= 0) stats.flightTime += dt;
@@ -268,9 +315,29 @@ function frame(now: number) {
     blackout.style.background = `radial-gradient(circle, rgba(0,0,0,${0.15 + st * 0.85}) ${inner}%, #000 ${inner + 35}%)`;
   }
 
+  targetsView.update(dt, combat);
+  cockpit.setStores(combat.lgbLeft);
+  tgpView.soi = input.tgpMode;
+  const podPowered = s.avionicsPower;
+  if (cockpit.rightPage === 'TGP' || pipOn) tgpView.render(dt, renderer, scene, s, combat, [cockpit.root], targetsView, podPowered);
   renderer.render(scene, cockpit.camera);
-  if (s.avionicsPower) hud.draw(dt, cockpit.camera, cockpit.hudCorners(), s, aircraft.attitude(), terrain);
-  else hud.clear();
+  if (pipOn && podPowered) {
+    const w = window.innerWidth, h = window.innerHeight;
+    const size = Math.round(Math.min(h * 0.5, w * 0.42));
+    tgpView.drawPip(renderer, w - size - 16, 16, size);
+  }
+  if (s.avionicsPower) {
+    const sol = combat.weapon === 'LGB' && combat.lgbLeft > 0 && !s.onGround ? combat.lgbSolution(s) : null;
+    const hc: HudCombat = {
+      armed: input.controls.switches.masterArm,
+      weaponText: combat.weapon === 'LGB' ? `LGB ${combat.lgbLeft}` : `GUN ${combat.gunLeft}`,
+      tdPoint: combat.tgp.point,
+      inRange: sol && combat.bombs.length === 0 ? sol.inRange : null,
+      pipper: combat.weapon === 'GUN' ? combat.gunPipper(s) : null,
+      bombTof: combat.bombs[0] ? combat.bombs[0].pos.distanceTo(combat.tgp.point) / Math.max(combat.bombs[0].vel.length(), 1) : null,
+    };
+    hud.draw(dt, cockpit.camera, cockpit.hudCorners(), s, aircraft.attitude(), terrain, hc);
+  } else hud.clear();
 
   if (msgTimer > 0) {
     msgTimer -= dt;
@@ -287,5 +354,5 @@ function frame(now: number) {
 }
 
 // Expose a tiny hook for automated tests.
-(window as unknown as { __game: unknown }).__game = { aircraft, input, cockpit, startFlight, setPaused };
+(window as unknown as { __game: unknown }).__game = { aircraft, input, cockpit, combat, startFlight, setPaused };
 requestAnimationFrame(frame);
