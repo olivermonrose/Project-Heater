@@ -1,0 +1,20 @@
+{
+  "name": "kestrel-jet-sim",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && node tools/inline.mjs",
+    "preview": "vite preview",
+    "flight-check": "esbuild tools/flight-check.ts --bundle --platform=node --outfile=dist/flight-check.cjs --log-level=error && node dist/flight-check.cjs"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.170.0",
+    "typescript": "5.6.3",
+    "vite": "5.4.11"
+  }
+}
