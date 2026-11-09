@@ -6,6 +6,7 @@ import { APRON, TAXIWAYS } from './world';
 import { SwitchPanel } from './switches';
 import { checklist } from '../checklist';
 import { SITES } from '../sim/combat';
+import { Threats, SAM_LAUNCH_RANGE } from '../sim/threats';
 
 export type LeftPage = 'CHK' | 'ENG';
 const LEFT_PAGES: LeftPage[] = ['CHK', 'ENG'];
@@ -34,6 +35,9 @@ export class Cockpit {
   /** Bomb meshes hanging under the wings, hidden as they are released. */
   private stores: THREE.Mesh[] = [];
   private ufc: Mfd;
+  private rwrScope: Mfd;
+  /** Enemy air defence picture for the radar warning display and NAV page. */
+  threats: Threats | null = null;
   private mfdTimer = 0;
   private mapImage: HTMLCanvasElement;
   private canopy = new THREE.Group();
@@ -42,6 +46,8 @@ export class Cockpit {
   readonly switches: SwitchPanel;
   leftPage: LeftPage = 'ENG';
   hasFlown = false;
+  /** Camera shake from hits and nearby explosions, decays by itself. */
+  shake = 0;
   private powered = true;
 
   constructor(terrain: Terrain) {
@@ -75,6 +81,11 @@ export class Cockpit {
     this.ufc = new Mfd(0.12, 0.08, 256, 170);
     this.ufc.mesh.position.set(0, 0.09, 0.005);
     panel.add(this.ufc.mesh);
+    // Radar warning display, between the two MFDs under the UFC.
+    this.rwrScope = new Mfd(0.1);
+    this.rwrScope.mesh.position.set(0, -0.075, 0.005);
+    panel.add(this.rwrScope.mesh);
+    add(new THREE.BoxGeometry(0.115, 0.115, 0.012), lam(PANEL_DARK), 0, -0.075, -0.004, panel);
     // Bezels around the displays.
     for (const x of [-0.235, 0.235]) add(new THREE.BoxGeometry(0.19, 0.19, 0.012), lam(PANEL_DARK), x, -0.04, -0.004, panel);
     // Center pedestal down between the knees.
@@ -186,6 +197,12 @@ export class Cockpit {
     this.head.rotation.set(look.pitch, look.yaw, 0, 'YXZ');
     // Lean slightly to the side when looking behind, like a real pilot would.
     this.head.position.set(Math.sin(look.yaw) * -0.08, 0, Math.max(0, Math.abs(look.yaw) - 1.2) * -0.05);
+    if (this.shake > 0) {
+      const k = Math.min(this.shake, 1) * 0.025;
+      this.head.position.x += (Math.random() - 0.5) * k;
+      this.head.position.y += (Math.random() - 0.5) * k;
+      this.shake = Math.max(0, this.shake - dt * 2.5);
+    }
     if (this.camera.fov !== look.fov) {
       this.camera.fov = look.fov;
       this.camera.updateProjectionMatrix();
@@ -207,13 +224,14 @@ export class Cockpit {
         if (this.leftPage === 'ENG') drawEnginePage(this.leftMfd, s, input);
         else drawChecklistPage(this.leftMfd, s, input, this.hasFlown);
         if (this.rightPage === 'NAV') {
-          drawNavPage(this.rightMfd, s, this.mapImage);
+          drawNavPage(this.rightMfd, s, this.mapImage, this.threats);
           this.rightMfd.mesh.material = this.rightCanvasMat;
         } else if (this.tgpMaterial) this.rightMfd.mesh.material = this.tgpMaterial;
+        drawRwr(this.rwrScope, s, this.threats);
         this.powered = true;
       } else if (this.powered) {
         this.rightMfd.mesh.material = this.rightCanvasMat;
-        for (const m of [this.leftMfd, this.rightMfd]) {
+        for (const m of [this.leftMfd, this.rightMfd, this.rwrScope]) {
           m.ctx.fillStyle = '#020303';
           m.ctx.fillRect(0, 0, 256, 256);
           m.tex.needsUpdate = true;
@@ -409,7 +427,7 @@ function buildMapImage(terrain: Terrain) {
   return cv;
 }
 
-function drawNavPage(m: Mfd, s: AircraftState, map: HTMLCanvasElement) {
+function drawNavPage(m: Mfd, s: AircraftState, map: HTMLCanvasElement, threats: Threats | null) {
   frame(m, 'NAV  NORTH UP  40 NM', ['NAV', 'TGP'], 'NAV');
   const g = m.ctx;
   const area = { x: 8, y: 24, w: 240, h: 212 };
@@ -458,6 +476,18 @@ function drawNavPage(m: Mfd, s: AircraftState, map: HTMLCanvasElement) {
     g.stroke();
     g.fillText(site.name, x1 + 9, y1 + 4);
   }
+  // SAM engagement ring while the site's radar is alive.
+  const samRadar = threats ? threats.samRadars() : [];
+  g.setLineDash([5, 4]);
+  g.strokeStyle = 'rgba(255,74,60,0.8)';
+  g.lineWidth = 1.5;
+  for (const r of samRadar) {
+    [x1, y1] = toScreen(r.x, r.z);
+    g.beginPath();
+    g.arc(x1, y1, SAM_LAUNCH_RANGE * scale, 0, Math.PI * 2);
+    g.stroke();
+  }
+  g.setLineDash([]);
   // Range rings.
   g.strokeStyle = 'rgba(125,255,158,0.35)';
   for (const nm of [10, 20]) {
@@ -490,6 +520,91 @@ function drawNavPage(m: Mfd, s: AircraftState, map: HTMLCanvasElement) {
   g.font = 'bold 12px monospace';
   g.textAlign = 'left';
   g.fillText(`HOME ${brg.toFixed(0).padStart(3, '0')}° ${(Math.hypot(dx, dz) / 1852).toFixed(1)}NM`, 12, 232);
+  m.tex.needsUpdate = true;
+}
+
+function drawRwr(m: Mfd, s: AircraftState, threats: Threats | null) {
+  const g = m.ctx;
+  g.fillStyle = '#030605';
+  g.fillRect(0, 0, 256, 256);
+  const cx = 128, cy = 124;
+  g.strokeStyle = 'rgba(125,255,158,0.35)';
+  g.lineWidth = 2;
+  for (const r of [38, 76, 112]) {
+    g.beginPath();
+    g.arc(cx, cy, r, 0, Math.PI * 2);
+    g.stroke();
+  }
+  // Own aircraft.
+  g.strokeStyle = GREEN;
+  g.beginPath();
+  g.moveTo(cx, cy - 10);
+  g.lineTo(cx, cy + 10);
+  g.moveTo(cx - 9, cy);
+  g.lineTo(cx + 9, cy);
+  g.moveTo(cx - 4, cy + 8);
+  g.lineTo(cx + 4, cy + 8);
+  g.stroke();
+  if (!threats) {
+    m.tex.needsUpdate = true;
+    return;
+  }
+  const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(s.quat);
+  const hdg = Math.atan2(fwd.x, -fwd.z);
+  const rel = (p: THREE.Vector3) => Math.atan2(p.x - s.pos.x, -(p.z - s.pos.z)) - hdg;
+  const flash = Math.floor(performance.now() / 180) % 2 === 0;
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  let launch = false;
+  for (const c of threats.rwr) {
+    const a = rel(c.pos);
+    const r = c.state === 'launch' ? 38 : c.state === 'track' ? 76 : 106;
+    const x = cx + Math.sin(a) * r, y = cy - Math.cos(a) * r;
+    const col = c.state === 'launch' ? RED : c.state === 'track' ? AMBER : GREEN;
+    if (c.state === 'launch') launch = true;
+    if (c.state === 'launch' && !flash) continue;
+    g.fillStyle = col;
+    g.strokeStyle = col;
+    g.font = 'bold 26px monospace';
+    g.fillText(c.type === 'SAM' ? 'S' : 'A', x, y + 1);
+    if (c.state === 'track') g.strokeRect(x - 15, y - 15, 30, 30);
+    if (c.state === 'launch') {
+      g.beginPath();
+      g.arc(x, y, 18, 0, Math.PI * 2);
+      g.stroke();
+    }
+  }
+  // Inbound missiles (missile warning): red diamonds, closer = nearer the centre.
+  for (const mm of threats.inbound) {
+    const a = rel(mm.pos);
+    const r = 16 + Math.min(1, mm.pos.distanceTo(s.pos) / 10000) * 96;
+    const x = cx + Math.sin(a) * r, y = cy - Math.cos(a) * r;
+    g.fillStyle = RED;
+    g.beginPath();
+    g.moveTo(x, y - 9);
+    g.lineTo(x + 7, y);
+    g.lineTo(x, y + 9);
+    g.lineTo(x - 7, y);
+    g.closePath();
+    g.fill();
+  }
+  g.textBaseline = 'alphabetic';
+  g.font = 'bold 18px monospace';
+  g.textAlign = 'left';
+  if (threats.missileWarning && flash) {
+    g.fillStyle = RED;
+    g.fillText('MISSILE', 8, 22);
+  } else if (launch) {
+    g.fillStyle = RED;
+    g.fillText('LAUNCH', 8, 22);
+  }
+  g.fillStyle = threats.chaff < 10 ? AMBER : WHITE;
+  g.fillText(`CHF ${threats.chaff}`, 8, 248);
+  g.textAlign = 'right';
+  g.fillStyle = threats.flares < 10 ? AMBER : WHITE;
+  g.fillText(`FLR ${threats.flares}`, 248, 248);
+  g.fillStyle = WHITE;
+  g.fillText('RWR', 248, 22);
   m.tex.needsUpdate = true;
 }
 

@@ -10,6 +10,11 @@ export class EngineAudio {
   private abGain!: GainNode;
   private windGain!: GainNode;
   private windFilter!: BiquadFilterNode;
+  private master!: GainNode;
+  private noise!: AudioBuffer;
+  private rwrOsc!: OscillatorNode;
+  private rwrGain!: GainNode;
+  private beepUntil = 0;
   muted = false;
 
   start() {
@@ -36,6 +41,17 @@ export class EngineAudio {
     const master = ctx.createGain();
     master.gain.value = 0.7;
     master.connect(ctx.destination);
+    this.master = master;
+    this.noise = noise;
+    this.rwrOsc = ctx.createOscillator();
+    this.rwrOsc.type = 'square';
+    this.rwrGain = ctx.createGain();
+    this.rwrGain.gain.value = 0;
+    const rwrFilter = ctx.createBiquadFilter();
+    rwrFilter.type = 'lowpass';
+    rwrFilter.frequency.value = 2500;
+    this.rwrOsc.connect(rwrFilter).connect(this.rwrGain).connect(master);
+    this.rwrOsc.start();
 
     this.engineFilter = ctx.createBiquadFilter();
     this.engineFilter.type = 'lowpass';
@@ -79,5 +95,48 @@ export class EngineAudio {
     const v = s.vel.length();
     this.windFilter.frequency.setTargetAtTime(300 + v * 6, t, 0.2);
     this.windGain.gain.setTargetAtTime(this.muted || s.destroyed ? 0 : Math.min(0.5, v / 500), t, 0.2);
+  }
+
+  /**
+   * Radar warning tones. Launch / missile warning: fast warble. Lock: pulsing
+   * tone. A new radar looking at you: a short double beep.
+   */
+  warning(state: 'none' | 'search' | 'track' | 'launch', newContact: boolean) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    if (newContact) this.beepUntil = t + 0.32;
+    let gain = 0;
+    let freq = 1000;
+    if (state === 'launch') {
+      freq = Math.floor(t * 9) % 2 === 0 ? 1450 : 950;
+      gain = 0.05;
+    } else if (state === 'track') {
+      freq = 1150;
+      gain = (t * 4) % 1 < 0.55 ? 0.04 : 0;
+    } else if (t < this.beepUntil) {
+      freq = 800;
+      gain = (this.beepUntil - t) % 0.16 > 0.07 ? 0.04 : 0;
+    }
+    if (this.muted) gain = 0;
+    this.rwrOsc.frequency.setTargetAtTime(freq, t, 0.004);
+    this.rwrGain.gain.setTargetAtTime(gain, t, 0.006);
+  }
+
+  /** Short burst of filtered noise: hits, explosions, dispenser pops. */
+  thump(volume: number, freq: number, seconds: number) {
+    if (!this.ctx || this.muted) return;
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.value = freq;
+    const g = ctx.createGain();
+    const t = ctx.currentTime;
+    g.gain.setValueAtTime(volume, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + seconds);
+    src.connect(f).connect(g).connect(this.master);
+    src.start(t, Math.random());
+    src.stop(t + seconds + 0.05);
   }
 }

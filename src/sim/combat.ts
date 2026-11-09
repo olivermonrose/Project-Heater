@@ -7,7 +7,7 @@ import { AircraftState } from './aircraft';
 
 const G = 9.81;
 
-export type TargetKind = 'truck' | 'tank' | 'apc' | 'fuelTank' | 'warehouse' | 'samLauncher' | 'samRadar';
+export type TargetKind = 'truck' | 'tank' | 'apc' | 'fuelTank' | 'warehouse' | 'samLauncher' | 'samRadar' | 'aaa' | 'manpads';
 
 export interface Target {
   id: number;
@@ -31,7 +31,7 @@ export interface TargetSite {
 export const SITES: TargetSite[] = [
   { name: 'A', label: 'SUPPLY DEPOT', x: 11000, z: -5000 },
   { name: 'B', label: 'ARMOR COLUMN', x: 16000, z: -12000 },
-  { name: 'C', label: 'SAM SITE', x: -4000, z: 16000 },
+  { name: 'C', label: 'SAM SITE', x: 19500, z: -19500 },
 ];
 
 const KIND_INFO: Record<TargetKind, { radius: number; hp: number }> = {
@@ -42,6 +42,8 @@ const KIND_INFO: Record<TargetKind, { radius: number; hp: number }> = {
   warehouse: { radius: 16, hp: 220 },
   samLauncher: { radius: 5, hp: 60 },
   samRadar: { radius: 5, hp: 60 },
+  aaa: { radius: 4, hp: 45 },
+  manpads: { radius: 3.5, hp: 25 },
 };
 
 export type WeaponKind = 'LGB' | 'GUN';
@@ -383,10 +385,18 @@ function buildTargets(terrain: Terrain): Target[] {
   add('A', 'warehouse', ax + 50, az - 70, 0.3);
   for (let i = 0; i < 3; i++) add('A', 'fuelTank', ax - 80 + i * 26, az + 60, 0);
   for (let i = 0; i < 5; i++) add('A', 'truck', ax + 40 + i * 12, az + 30, 1.2);
+  // Depot air defence: two radar-directed guns and a shoulder-fired missile team.
+  add('A', 'aaa', ax - 260, az + 180, 0.8);
+  add('A', 'aaa', ax + 240, az - 220, 2.2);
+  add('A', 'manpads', ax + 150, az + 240, 1.9);
   // B: armor column strung out along a track.
   const [bx, bz] = [SITES[1].x, SITES[1].z];
   for (let i = 0; i < 7; i++) add('B', i % 3 === 2 ? 'apc' : 'tank', bx + i * 28, bz + i * 18, -1.0);
-  // C: SAM site, three launchers around a radar (they don't shoot yet).
+  // The column travels with a gun and two missile teams.
+  add('B', 'aaa', bx + 90, bz + 120, -1.0);
+  add('B', 'manpads', bx - 120, bz - 60, -0.6);
+  add('B', 'manpads', bx + 260, bz + 140, -1.3);
+  // C: SAM site, three launchers around a radar, guarded by a gun.
   const [cx, cz] = [SITES[2].x, SITES[2].z];
   add('C', 'samRadar', cx, cz, 0);
   for (let i = 0; i < 3; i++) {
@@ -394,6 +404,7 @@ function buildTargets(terrain: Terrain): Target[] {
     add('C', 'samLauncher', cx + Math.cos(a) * 70, cz + Math.sin(a) * 70, -a);
   }
   add('C', 'truck', cx + 20, cz - 110, 0.5);
+  add('C', 'aaa', cx - 180, cz + 140, 0.4);
   return list;
 }
 

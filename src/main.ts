@@ -11,6 +11,9 @@ import { Combat, CombatEvent, SITES } from './sim/combat';
 import { TargetsView } from './render/targets3d';
 import { TgpView } from './render/tgp';
 import { HudCombat } from './render/hud';
+import { Threats, ThreatEvent } from './sim/threats';
+import { ThreatsView } from './render/threats3d';
+import { TGP_FOVS } from './sim/combat';
 
 const SIM_HZ = 120;
 
@@ -25,6 +28,7 @@ const resumeBtn = document.getElementById('btnResume') as HTMLButtonElement;
 const reticle = document.getElementById('reticle') as HTMLDivElement;
 const tip = document.getElementById('tip') as HTMLDivElement;
 const debrief = document.getElementById('debrief') as HTMLDivElement;
+const hitflash = document.getElementById('hitflash') as HTMLDivElement;
 
 const renderer = new THREE.WebGLRenderer({ canvas: glCanvas, antialias: true, logarithmicDepthBuffer: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -40,6 +44,13 @@ const input = new Input(glCanvas);
 const combat = new Combat(terrain);
 const targetsView = new TargetsView(terrain);
 scene.add(targetsView.group);
+const threats = new Threats(terrain);
+const threatsView = new ThreatsView();
+scene.add(threatsView.group);
+cockpit.threats = threats;
+let hitFlash = 0;
+let lastAaaMsg = -99;
+const hinted = new Set<string>();
 const tgpView = new TgpView();
 cockpit.setTgpMaterial(tgpView.material);
 let pipOn = false;
@@ -77,6 +88,10 @@ function startFlight(kind: StartKind) {
   else aircraft.resetInAir(-6000, 300 + 8000 / 3.281, 9000, 20, 160);
   input.resetForNewFlight(kind);
   combat.reset();
+  threats.reset(combat);
+  threatsView.reset();
+  hinted.clear();
+  hitFlash = 0;
   targetsView.rebuild(combat);
   pipOn = false;
   cockpit.rightPage = 'NAV';
@@ -143,6 +158,70 @@ function handleCombatEvents(events: CombatEvent[]) {
   }
 }
 
+/** Show a teaching hint only the first time it applies in a flight. */
+function hintOnce(key: string, text: string, seconds: number, fallback?: string) {
+  if (!hinted.has(key)) {
+    hinted.add(key);
+    showMessage(text, seconds);
+  } else if (fallback) showMessage(fallback, 2.5);
+}
+
+function handleThreatEvents(tev: ThreatEvent[]) {
+  threatsView.onEvents(tev);
+  const s = aircraft.s;
+  for (const e of tev) {
+    switch (e.type) {
+      case 'missileLaunch':
+        if (e.missile.kind === 'radar') {
+          hintOnce('samLaunch', 'SAM LAUNCH! Turn so the S on your radar warning display is off your wingtip, and drop chaff (D-pad down / Z)', 7, 'SAM LAUNCH!');
+        }
+        break;
+      case 'missileDetonate': {
+        const d = e.pos.distanceTo(s.pos);
+        if (e.hitPlayer) {
+          hitFlash = 1;
+          cockpit.shake = 1.2;
+          audio.thump(0.9, 900, 0.9);
+          if (!s.destroyed) showMessage(`HIT by a ${e.kind === 'radar' ? 'SAM' : 'heat seeker'}! Damage ${Math.round(s.damage)}%`, 4);
+        } else if (d < 1500) {
+          cockpit.shake = Math.max(cockpit.shake, 0.4 * (1 - d / 1500));
+          audio.thump(0.5 * (1 - d / 1500), 500, 0.7);
+        }
+        break;
+      }
+      case 'missileEvaded':
+        if (!s.destroyed) showMessage(e.kind === 'radar' ? 'SAM defeated' : 'Heat seeker defeated', 2.5);
+        break;
+      case 'shellHit':
+        hitFlash = Math.max(hitFlash, 0.35);
+        cockpit.shake = Math.max(cockpit.shake, 0.35);
+        audio.thump(0.4, 1400, 0.15);
+        if (!s.destroyed && s.time - lastAaaMsg > 8) {
+          lastAaaMsg = s.time;
+          hintOnce('aaa', 'Taking anti-aircraft fire! Jink, or climb above 13,000 ft where the guns can\'t reach', 5, `Taking gunfire! Damage ${Math.round(s.damage)}%`);
+        }
+        break;
+      case 'flakBurst': {
+        const d = e.pos.distanceTo(s.pos);
+        if (d < 400) audio.thump(0.25 * (1 - d / 400), 600, 0.3);
+        break;
+      }
+      case 'dispense':
+        audio.thump(0.18, 2500, 0.08);
+        break;
+      case 'cmEmpty':
+        showMessage('Out of chaff and flares', 2.5);
+        break;
+      case 'newContact':
+        if (e.contact.type === 'SAM') hintOnce('samSearch', 'A SAM radar is looking at you. Watch the radar warning display (centre, under the UFC)', 5);
+        break;
+    }
+  }
+  if (tev.some((e) => e.type === 'missileLaunch' && e.missile.kind === 'ir')) {
+    hintOnce('irLaunch', 'MISSILE! Heat seeker inbound: drop flares (D-pad down / Z) and come out of afterburner', 6, 'MISSILE!');
+  }
+}
+
 function handleEvents(events: SimEvent[]) {
   for (const e of events) {
     switch (e.type) {
@@ -198,6 +277,9 @@ function showDebrief() {
       <tr><td>Fuel used</td><td>${Math.round(used).toLocaleString()} lb</td></tr>
       <tr><td>Targets destroyed</td><td>${stats.kills} of ${combat.targets.length}</td></tr>
       <tr><td>Bombs / rounds left</td><td>${combat.lgbLeft} / ${combat.gunLeft}</td></tr>
+      <tr><td>Missiles evaded</td><td>${threats.evaded}</td></tr>
+      <tr><td>Hits taken</td><td>${threats.hitsTaken}</td></tr>
+      <tr><td>Chaff / flares left</td><td>${threats.chaff} / ${threats.flares}</td></tr>
       <tr><td>Damage</td><td>${Math.round(s.damage)}%</td></tr>
     </table>
     <div class="buttons" style="margin-top:18px"><button id="dbAgain">Fly again</button><button id="dbMenu">Main menu</button></div></div>`;
@@ -214,6 +296,7 @@ let last = performance.now();
 let debriefPrevA = true;
 let fpsT = 0, fpsN = 0, fps = 0;
 const events: SimEvent[] = [];
+const tmpSize = new THREE.Vector2();
 
 function frame(now: number) {
   requestAnimationFrame(frame);
@@ -269,6 +352,7 @@ function frame(now: number) {
     const airborne = !aircraft.s.onGround;
     const act = { ...input.combat, pickle: input.firePressed && airborne, trigger: input.fireHeld && airborne };
     const cevents: CombatEvent[] = [];
+    const tevents: ThreatEvent[] = [];
     let first = true;
     while (acc >= step) {
       aircraft.storesMass = combat.storesMass;
@@ -276,11 +360,17 @@ function frame(now: number) {
       aircraft.step(step, input.controls, events);
       const a = first ? act : { ...act, lockToggle: false, zoom: 0, weaponCycle: false, pickle: false, cueToSite: null };
       combat.step(step, aircraft.s, a, input.controls.switches.masterArm, aircraft.s.avionicsPower, cevents);
+      threats.step(step, aircraft, input.dispense, tevents, events);
       first = false;
       acc -= step;
     }
     handleEvents(events);
     handleCombatEvents(cevents);
+    handleThreatEvents(tevents);
+    const newContact = tevents.some((e) => e.type === 'newContact');
+    const rwrState = threats.missileWarning || threats.rwr.some((c) => c.state === 'launch') ? 'launch'
+      : threats.rwr.some((c) => c.state === 'track') ? 'track' : threats.rwr.length ? 'search' : 'none';
+    audio.warning(aircraft.s.avionicsPower && !aircraft.s.destroyed ? rwrState : 'none', newContact && aircraft.s.avionicsPower);
     const st = aircraft.s;
     stats.maxG = Math.max(stats.maxG, st.gLoad);
     if (!st.onGround && stats.liftoffAt >= 0) stats.flightTime += dt;
@@ -316,10 +406,17 @@ function frame(now: number) {
   }
 
   targetsView.update(dt, combat);
+  threatsView.update(paused ? 0 : dt, threats);
+  hitFlash = Math.max(0, hitFlash - dt * 2.5);
+  hitflash.style.opacity = String(Math.min(1, hitFlash));
   cockpit.setStores(combat.lgbLeft);
   tgpView.soi = input.tgpMode;
   const podPowered = s.avionicsPower;
-  if (cockpit.rightPage === 'TGP' || pipOn) tgpView.render(dt, renderer, scene, s, combat, [cockpit.root], targetsView, podPowered);
+  if (cockpit.rightPage === 'TGP' || pipOn) {
+    threatsView.setViewport(384, TGP_FOVS[combat.tgp.zoom]);
+    tgpView.render(dt, renderer, scene, s, combat, [cockpit.root], targetsView, podPowered);
+  }
+  threatsView.setViewport(renderer.getDrawingBufferSize(tmpSize).y, cockpit.camera.fov);
   renderer.render(scene, cockpit.camera);
   if (pipOn && podPowered) {
     const w = window.innerWidth, h = window.innerHeight;
@@ -335,6 +432,10 @@ function frame(now: number) {
       inRange: sol && combat.bombs.length === 0 ? sol.inRange : null,
       pipper: combat.weapon === 'GUN' ? combat.gunPipper(s) : null,
       bombTof: combat.bombs[0] ? combat.bombs[0].pos.distanceTo(combat.tgp.point) / Math.max(combat.bombs[0].vel.length(), 1) : null,
+      chaff: threats.chaff,
+      flares: threats.flares,
+      missileWarning: threats.missileWarning,
+      locked: threats.rwr.some((c) => c.type === 'SAM' && c.state !== 'search'),
     };
     hud.draw(dt, cockpit.camera, cockpit.hudCorners(), s, aircraft.attitude(), terrain, hc);
   } else hud.clear();
@@ -354,5 +455,5 @@ function frame(now: number) {
 }
 
 // Expose a tiny hook for automated tests.
-(window as unknown as { __game: unknown }).__game = { aircraft, input, cockpit, combat, startFlight, setPaused };
+(window as unknown as { __game: unknown }).__game = { aircraft, input, cockpit, combat, threats, threatsView, startFlight, setPaused };
 requestAnimationFrame(frame);

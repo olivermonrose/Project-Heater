@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "top-speed": "esbuild tools/top-speed.ts --bundle --platform=node --format=esm --outfile=dist/top-speed.mjs --log-level=error && node dist/top-speed.mjs",
     "bomb-check": "esbuild tools/bomb-check.ts --bundle --platform=node --format=esm --outfile=dist/bomb-check.mjs --log-level=error && node dist/bomb-check.mjs",
-    "flight-check": "esbuild tools/flight-check.ts --bundle --platform=node --format=esm --outfile=dist/flight-check.mjs --log-level=error && node dist/flight-check.mjs"
+    "flight-check": "esbuild tools/flight-check.ts --bundle --platform=node --format=esm --outfile=dist/flight-check.mjs --log-level=error && node dist/flight-check.mjs",
+    "threat-check": "esbuild tools/threat-check.ts --bundle --platform=node --format=esm --outfile=dist/threat-check.mjs --log-level=error && node dist/threat-check.mjs"
   },
   "dependencies": {
     "three": "0.170.0"

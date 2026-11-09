@@ -94,6 +94,21 @@ export class TargetsView {
         box(3, 1.5, 7, 0, 1, 0, olive);
         box(2.2, 2.2, 5.5, 0, 3, 0.5, sand).rotation.x = 0.6;
         break;
+      case 'aaa': {
+        // Tracked gun carrier: hull, turret, four barrels and a small radar dish.
+        box(3.2, 1.3, 6.4, 0, 0.9, 0, olive);
+        box(2.6, 1.0, 2.8, 0, 2.0, 0.4, olive);
+        for (const x of [-0.9, -0.5, 0.5, 0.9]) box(0.12, 0.12, 3.2, x, 2.3, -2.2, olive).rotation.x = 0.35;
+        const dish = box(1.4, 0.9, 0.12, 0, 3.0, 1.4, sand);
+        dish.rotation.x = -0.4;
+        break;
+      }
+      case 'manpads':
+        // Pickup truck carrying a missile team.
+        box(2, 1.0, 4.6, 0, 0.8, 0, sand);
+        box(1.9, 0.8, 1.6, 0, 1.6, -0.9, sand);
+        box(0.16, 0.16, 1.6, 0.4, 1.9, 1.2, olive).rotation.x = -0.5;
+        break;
       case 'samRadar': {
         box(3, 2, 6, 0, 1.2, 0, olive);
         const dish = box(5, 3.5, 0.3, 0, 4.5, 0, sand);
