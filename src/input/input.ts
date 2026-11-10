@@ -41,6 +41,8 @@ export class Input {
   /** Fire button held / just pressed (A in the air, Space on the keyboard). */
   fireHeld = false;
   firePressed = false;
+  /** Countermeasures button held: drops chaff and a flare, repeating while held. */
+  dispense = false;
   private siteIndex = 0;
   look: LookInput = { yaw: 0, pitch: 0, fov: 70 };
   gamepadName = '';
@@ -52,6 +54,7 @@ export class Input {
   private mouseLook = { yaw: 0, pitch: 0 };
   private dragging = false;
   private padLook = { yaw: 0, pitch: 0 };
+  private padZoom = false;
   private abGate = false; // must release and press again to cross into afterburner
   private downAt = { x: 0, y: 0 };
   private pendingClick: { x: number; y: number } | null = null;
@@ -184,6 +187,8 @@ export class Input {
     act.slewY = (k('KeyI') ? 1 : 0) - (k('KeyK') ? 1 : 0);
     this.fireHeld = (!this.interactMode && b(BTN.A)) || k('Space');
     this.firePressed = (!this.interactMode && bp(BTN.A)) || kp('Space');
+    // Countermeasures: D-pad down on the controller, Z on the keyboard.
+    this.dispense = (!this.tgpMode && b(BTN.DOWN)) || k('KeyZ');
 
     c.brakes = (!this.interactMode && b(BTN.A)) || k('KeyB') ? 1 : 0;
     if (bp(BTN.Y) || kp('KeyG')) c.gearDown = !c.gearDown;
@@ -213,8 +218,14 @@ export class Input {
         this.padLook.yaw += (ty - this.padLook.yaw) * Math.min(1, dt * 8);
         this.padLook.pitch += (tp - this.padLook.pitch) * Math.min(1, dt * 8);
       }
-      if (!this.tgpMode && b(BTN.UP)) this.look.fov = clamp(this.look.fov - 30 * dt, 30, 90);
-      if (!this.tgpMode && b(BTN.DOWN)) this.look.fov = clamp(this.look.fov + 30 * dt, 30, 90);
+      // D-pad up: zoom the view in while held, like squinting at something far away.
+      if (!this.tgpMode && b(BTN.UP)) {
+        this.padZoom = true;
+        this.look.fov = Math.max(35, this.look.fov - 120 * dt);
+      } else if (this.padZoom) {
+        this.look.fov = Math.min(70, this.look.fov + 120 * dt);
+        if (this.look.fov >= 70) this.padZoom = false;
+      }
     } else {
       this.padLook.yaw = this.padLook.pitch = 0;
     }

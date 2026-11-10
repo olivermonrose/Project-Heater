@@ -16,6 +16,11 @@ export interface HudCombat {
   inRange: boolean | null; // guided bomb release cue (null when not applicable)
   pipper: THREE.Vector3 | null; // gun impact point
   bombTof: number | null;
+  chaff: number;
+  flares: number;
+  missileWarning: boolean;
+  /** A SAM radar is locked on (tracking or guiding a missile). */
+  locked: boolean;
 }
 const COLOR = 'rgba(110, 255, 150, 0.95)';
 
@@ -232,6 +237,7 @@ export class Hud {
         g.font = `${Math.round(scale * 0.8)}px "SF Mono", Menlo, monospace`;
       }
       if (combat.bombTof !== null) textAt(4.3, -6.6, `TOF ${Math.round(combat.bombTof)}`);
+      textAt(4.3, -9.0, `C${combat.chaff} F${combat.flares}`);
       if (combat.pipper && combat.armed) {
         const pp = projPoint(combat.pipper);
         if (pp) {
@@ -248,6 +254,19 @@ export class Hud {
     const blinkOn = Math.floor(this.blink * 3) % 2 === 0;
     const sink = -s.vel.y;
     const timeToImpact = sink > 1 ? (agl / 3.281) / sink : 99;
+    if (combat?.missileWarning && Math.floor(this.blink * 5) % 2 === 0) {
+      g.font = `bold ${Math.round(scale * 1.3)}px Menlo, monospace`;
+      textAt(0, 6.2, 'MISSILE', 'center');
+      g.font = `${Math.round(scale * 0.8)}px "SF Mono", Menlo, monospace`;
+    } else if (combat?.locked) {
+      textAt(0, 6.2, 'LOCK', 'center');
+    }
+    if (s.damage >= 1) {
+      g.save();
+      if (s.damage > 66) g.fillStyle = 'rgba(255, 90, 70, 0.95)';
+      textAt(4.3, -7.8, `DMG ${Math.round(s.damage)}%`);
+      g.restore();
+    }
     if (!s.onGround && timeToImpact < 6 && blinkOn) {
       g.font = `bold ${Math.round(scale * 1.2)}px Menlo, monospace`;
       textAt(0, -5.5, 'PULL UP', 'center');

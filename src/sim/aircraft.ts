@@ -257,11 +257,15 @@ export class Aircraft {
     const lapse = Math.pow(rho / 1.225, 0.7);
     const milRam = 1 + 0.17 * Math.min(mach, 2.2);
     const abRam = 1 + 0.115 * Math.pow(Math.min(mach, 2.2), 2.5);
+    // Battle damage above 40% costs thrust (down to half at 100%).
+    const dmgThrust = 1 - clamp((s.damage - 40) / 120, 0, 0.5);
     s.thrust = s.engineRunning && !s.starting
-      ? (MIL_THRUST * (0.05 + 0.95 * Math.pow(core, 1.5)) * milRam + (AB_THRUST - MIL_THRUST) * s.afterburner * abRam) * lapse
+      ? (MIL_THRUST * (0.05 + 0.95 * Math.pow(core, 1.5)) * milRam + (AB_THRUST - MIL_THRUST) * s.afterburner * abRam) * lapse * dmgThrust
       : 0;
     s.fuelFlow = s.engineRunning ? (s.starting ? 0.05 : 0) + 0.07 + 1.05 * Math.pow(core, 1.3) + 4.6 * s.afterburner : 0;
-    s.fuel = Math.max(0, s.fuel - s.fuelFlow * dt);
+    // Heavy damage holes the tanks: a slow leak above 60%.
+    const leak = Math.max(0, s.damage - 60) * 0.02;
+    s.fuel = Math.max(0, s.fuel - (s.fuelFlow + leak) * dt);
 
     // ---------- Gear and speedbrake ----------
     const gearTarget = input.gearDown || s.onGround ? 1 : 0;
@@ -428,6 +432,13 @@ export class Aircraft {
     const newDir = new Vector3(Math.sin(heading), 0, -Math.cos(heading));
     s.vel.set(newDir.x * along, Math.max(s.vel.y, 0), newDir.z * along);
     s.quat.setFromEuler(new Euler(pitch, -heading, 0, 'YXZ'));
+  }
+
+  /** Battle damage from enemy fire. Destroys the jet at 100%. */
+  applyDamage(amount: number, reason: string, events: SimEvent[]) {
+    if (this.s.destroyed) return;
+    this.s.damage = Math.min(100, this.s.damage + amount);
+    if (this.s.damage >= 100) this.crash(events, reason);
   }
 
   private crash(events: SimEvent[], reason: string) {
