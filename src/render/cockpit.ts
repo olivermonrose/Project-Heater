@@ -7,6 +7,7 @@ import { SwitchPanel } from './switches';
 import { checklist } from '../checklist';
 import { SITES } from '../sim/combat';
 import { Threats, SAM_LAUNCH_RANGE } from '../sim/threats';
+import { CockpitDetail, buildStick, buildThrottle } from './cockpitDetail';
 
 export type LeftPage = 'CHK' | 'ENG';
 const LEFT_PAGES: LeftPage[] = ['CHK', 'ENG'];
@@ -38,6 +39,7 @@ export class Cockpit {
   private rwrScope: Mfd;
   /** Enemy air defence picture for the radar warning display and NAV page. */
   threats: Threats | null = null;
+  private detail!: CockpitDetail;
   private mfdTimer = 0;
   private mapImage: HTMLCanvasElement;
   private canopy = new THREE.Group();
@@ -70,7 +72,7 @@ export class Cockpit {
     panel.position.set(0, -0.36, -0.7);
     panel.rotation.x = -0.28;
     this.root.add(panel);
-    add(new THREE.BoxGeometry(0.82, 0.38, 0.04), lam(PANEL), 0, 0, -0.02, panel);
+    const panelFace = add(new THREE.BoxGeometry(0.82, 0.38, 0.04), lam(PANEL), 0, 0, -0.02, panel);
     this.leftMfd = new Mfd(0.155);
     this.leftMfd.mesh.position.set(-0.235, -0.04, 0.005);
     panel.add(this.leftMfd.mesh);
@@ -89,19 +91,20 @@ export class Cockpit {
     // Bezels around the displays.
     for (const x of [-0.235, 0.235]) add(new THREE.BoxGeometry(0.19, 0.19, 0.012), lam(PANEL_DARK), x, -0.04, -0.004, panel);
     // Center pedestal down between the knees.
-    add(new THREE.BoxGeometry(0.2, 0.25, 0.3), lam(PANEL), 0, -0.62, -0.55);
+    const pedestal = add(new THREE.BoxGeometry(0.2, 0.25, 0.3), lam(PANEL), 0, -0.62, -0.55);
 
     // Side consoles.
-    add(new THREE.BoxGeometry(0.17, 0.1, 0.95), lam(PANEL), -0.36, -0.52, -0.12);
-    add(new THREE.BoxGeometry(0.17, 0.1, 0.95), lam(PANEL), 0.36, -0.52, -0.12);
+    const consoleL = add(new THREE.BoxGeometry(0.17, 0.1, 0.95), lam(PANEL), -0.36, -0.52, -0.12);
+    const consoleR = add(new THREE.BoxGeometry(0.17, 0.1, 0.95), lam(PANEL), 0.36, -0.52, -0.12);
 
     // Throttle on the left console, side stick on the right.
-    this.throttleGrip = add(new THREE.BoxGeometry(0.05, 0.1, 0.07), lam(0x3c4146), -0.3, -0.42, -0.1);
+    this.throttleGrip = buildThrottle(lam);
+    this.throttleGrip.position.set(-0.3, -0.42, -0.1);
+    this.root.add(this.throttleGrip);
     const stickPivot = new THREE.Group();
     stickPivot.position.set(0.33, -0.47, -0.25);
     this.root.add(stickPivot);
-    const grip = add(new THREE.CylinderGeometry(0.018, 0.022, 0.12, 8), lam(0x3c4146), 0, 0.06, 0, stickPivot);
-    grip.rotation.x = -0.25;
+    stickPivot.add(buildStick(lam));
     this.stick = stickPivot;
 
     // HUD: frame posts and the combiner glass.
@@ -177,6 +180,7 @@ export class Cockpit {
     }
 
     this.switches = new SwitchPanel(this.root, panel);
+    this.detail = new CockpitDetail(this.root, panel, panelFace, consoleL, consoleR, pedestal);
 
     this.mapImage = buildMapImage(terrain);
   }
@@ -215,6 +219,7 @@ export class Cockpit {
     const flash = lightsOn && (s.time % 1.2) < 0.08;
     (this.strobe.material as THREE.MeshBasicMaterial).color.setHex(flash ? 0xffffff : 0x222222);
     this.switches.update(input, s);
+    this.detail.update(dt, s);
     this.stick.rotation.set(input.pitch * 0.25, 0, -input.roll * 0.25);
 
     this.mfdTimer -= dt;

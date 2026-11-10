@@ -65,7 +65,7 @@ AVIONICS on, NAV LIGHTS on, CANOPY close, PARK BRAKE off. After landing, the sam
 ## Code layout
 
 - `src/sim/` pure simulation (terrain, flight model). No rendering, so it can also run on a multiplayer server later.
-- `src/render/` Three.js world, cockpit, MFDs and HUD.
+- `src/render/` Three.js world (with procedural ground detail, scrub and boulders), cockpit (`cockpitDetail.ts` holds panels, gauges, stick and throttle), MFDs and HUD.
 - `src/input/` controller and keyboard mapping.
 - `npm run bomb-check` flies a guided-bomb attack and a gun pass against the targets; `npm run top-speed` reports top speed by altitude.
 - `npm run threat-check` flies scripted passes against each air defence, with and without chaff, flares and the notch.
