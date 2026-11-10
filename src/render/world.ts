@@ -28,6 +28,7 @@ export function buildWorld(scene: THREE.Scene, terrain: Terrain) {
 
   scene.add(buildTerrainMesh(terrain));
   scene.add(buildOuterGround());
+  scene.add(buildScatter(terrain));
   scene.add(buildAirbase());
   scene.add(buildTowns(terrain));
   scene.add(buildSkyDome());
@@ -73,7 +74,147 @@ function buildTerrainMesh(terrain: Terrain) {
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.computeVertexNormals();
   const mat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+  addGroundDetail(mat);
   return new THREE.Mesh(geo, mat);
+}
+
+// ---------- Ground detail ----------
+// A tileable grain texture blended in at three scales in world space: large
+// mottling seen from altitude, medium patches, and fine grain close to the
+// ground that fades out with distance so it never shows as a repeating tile.
+
+let detailTex: THREE.Texture | null = null;
+function groundDetailTexture() {
+  if (detailTex) return detailTex;
+  const N = 256;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const g = cv.getContext('2d')!;
+  const img = g.createImageData(N, N);
+  // Periodic value noise so the texture tiles seamlessly.
+  const lattice = (period: number, seed: number) => {
+    const v = new Float32Array(period * period);
+    let r = seed;
+    for (let i = 0; i < v.length; i++) v[i] = (r = (r * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+    return (x: number, y: number) => {
+      const fx = (x / N) * period, fy = (y / N) * period;
+      const x0 = Math.floor(fx), y0 = Math.floor(fy);
+      const tx = fx - x0, ty = fy - y0;
+      const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+      const at = (i: number, j: number) => v[((j % period) * period) + (i % period)];
+      const a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
+      return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+    };
+  };
+  const octs = [lattice(4, 11), lattice(8, 23), lattice(16, 37), lattice(32, 51), lattice(64, 79)];
+  const weights = [0.35, 0.25, 0.18, 0.12, 0.1];
+  let r = 999;
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      let n = 0;
+      octs.forEach((o, i) => (n += o(x, y) * weights[i]));
+      // A little pixel grain (pebbles).
+      n += (((r = (r * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) - 0.5) * 0.08;
+      const v = Math.max(0, Math.min(255, Math.round(n * 255)));
+      const k = (y * N + x) * 4;
+      img.data[k] = img.data[k + 1] = img.data[k + 2] = v;
+      img.data[k + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  detailTex = tex;
+  return tex;
+}
+
+function addGroundDetail(mat: THREE.MeshLambertMaterial) {
+  const tex = groundDetailTexture();
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.detailMap = { value: tex };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGroundPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGroundPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGroundPos;\nuniform sampler2D detailMap;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          float dist = length(vGroundPos - cameraPosition);
+          float big = texture2D(detailMap, vGroundPos.xz / 2300.0).r;
+          float mid = texture2D(detailMap, vGroundPos.xz / 310.0 + 0.37).r;
+          float fine = texture2D(detailMap, vGroundPos.xz / 23.0).r;
+          float grain = texture2D(detailMap, vGroundPos.xz / 3.1 + 0.11).r;
+          float nearF = 1.0 - smoothstep(150.0, 1800.0, dist);
+          float closeF = 1.0 - smoothstep(10.0, 140.0, dist);
+          float k = (0.76 + 0.48 * big) * (0.82 + 0.36 * mid);
+          k *= mix(1.0, 0.8 + 0.4 * fine, nearF);
+          k *= mix(1.0, 0.86 + 0.28 * grain, closeF);
+          // Darker gravel patches and lighter wind-blown sand.
+          diffuseColor.rgb *= k;
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.06, 1.02, 0.94), smoothstep(0.55, 0.75, mid));
+        }`);
+  };
+}
+
+/** Desert scrub and boulders scattered over the terrain (instanced: two draw calls). */
+function buildScatter(terrain: Terrain) {
+  const g = new THREE.Group();
+  let r = 4242;
+  const rand = () => ((r = (r * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const slopeAt = (x: number, z: number) => {
+    const d = 8;
+    return Math.hypot(terrain.heightAt(x + d, z) - terrain.heightAt(x - d, z), terrain.heightAt(x, z + d) - terrain.heightAt(x, z - d)) / (2 * d);
+  };
+  const onAirbase = (x: number, z: number) => x > -900 && x < 500 && z > -2000 && z < 2000;
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const sc = new THREE.Vector3();
+  const p = new THREE.Vector3();
+  const up = new THREE.Vector3(0, 1, 0);
+
+  // Scrub: low, dark olive-brown bushes on flat sandy ground.
+  const bushGeo = new THREE.IcosahedronGeometry(1, 0);
+  bushGeo.scale(1, 0.55, 1);
+  const bushes = new THREE.InstancedMesh(bushGeo, new THREE.MeshLambertMaterial({ color: 0x6d6440, flatShading: true }), 16000);
+  let k = 0;
+  for (let tries = 0; tries < 60000 && k < 16000; tries++) {
+    // Clumps: pick a centre, then scatter a few around it.
+    const cx = (rand() - 0.5) * (TERRAIN_SIZE - 3000), cz = (rand() - 0.5) * (TERRAIN_SIZE - 3000);
+    const n = 3 + Math.floor(rand() * 8);
+    for (let i = 0; i < n && k < 16000; i++) {
+      const x = cx + (rand() - 0.5) * 220, z = cz + (rand() - 0.5) * 220;
+      if (onAirbase(x, z) || slopeAt(x, z) > 0.25) continue;
+      const h = terrain.heightAt(x, z);
+      if (h > BASE_ELEV + 250) continue;
+      const s = 0.8 + rand() * 1.8;
+      sc.set(s * (0.8 + rand() * 0.5), s, s * (0.8 + rand() * 0.5));
+      q.setFromAxisAngle(up, rand() * 6.28);
+      p.set(x, h + s * 0.15, z);
+      bushes.setMatrixAt(k++, m.compose(p, q, sc));
+    }
+  }
+  bushes.count = k;
+  g.add(bushes);
+
+  // Boulders on the slopes and around the foot of the ridges.
+  const rockGeo = new THREE.DodecahedronGeometry(1, 0);
+  const rocks = new THREE.InstancedMesh(rockGeo, new THREE.MeshLambertMaterial({ color: 0x8a6e54, flatShading: true }), 9000);
+  k = 0;
+  for (let tries = 0; tries < 90000 && k < 9000; tries++) {
+    const x = (rand() - 0.5) * (TERRAIN_SIZE - 3000), z = (rand() - 0.5) * (TERRAIN_SIZE - 3000);
+    if (onAirbase(x, z)) continue;
+    const sl = slopeAt(x, z);
+    if (sl < 0.15 && rand() > 0.08) continue;
+    const s = 1.5 + rand() * rand() * 9;
+    sc.set(s * (0.7 + rand() * 0.6), s * (0.5 + rand() * 0.4), s * (0.7 + rand() * 0.6));
+    q.setFromEuler(new THREE.Euler(rand() * 0.6, rand() * 6.28, rand() * 0.6));
+    p.set(x, terrain.heightAt(x, z) + s * 0.1, z);
+    rocks.setMatrixAt(k++, m.compose(p, q, sc));
+  }
+  rocks.count = k;
+  g.add(rocks);
+  return g;
 }
 
 function buildOuterGround() {
@@ -96,7 +237,9 @@ function buildOuterGround() {
   shape.holes.push(hole);
   const geo = new THREE.ShapeGeometry(shape);
   geo.rotateX(-Math.PI / 2);
-  const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: 0xcfb084 }));
+  const outerMat = new THREE.MeshLambertMaterial({ color: 0xcfb084 });
+  addGroundDetail(outerMat);
+  const m = new THREE.Mesh(geo, outerMat);
   m.position.y = BASE_ELEV - 0.5;
   return m;
 }
