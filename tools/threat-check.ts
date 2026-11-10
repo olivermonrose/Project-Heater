@@ -182,3 +182,48 @@ trials('Depot run from home at 15k ft (all defences)', 4, () => ({
   fly: (a) => ({ hdg: bearingTo(a, depot.x, depot.z), alt: 300 + 15000 / 3.281, dispense: false }),
   seconds: 55,
 }));
+
+// 9. Bomb the SAM radar from 15k ft, dropping chaff whenever a missile is inbound.
+{
+  let kills = 0, deaths = 0;
+  const n = 10;
+  const { noActions } = await import('../src/sim/combat');
+  for (let k = 0; k < n; k++) {
+    const a = new Aircraft(t);
+    const c = new Combat(t);
+    const th = new Threats(t);
+    th.reset(c);
+    const radar = c.targets.find((x) => x.kind === 'samRadar')!;
+    const alt = 300 + 15000 / 3.281;
+    a.resetInAir(radar.pos.x - 24000, alt, radar.pos.z + 3000, 90, 230);
+    const input = neutralInput();
+    input.gearDown = false;
+    input.throttle = 0.8;
+    c.tgp.point.copy(radar.pos);
+    let act = noActions();
+    act.lockToggle = true;
+    c.step(dt, a.s, act, true, true, []);
+    let released = false;
+    const ev: SimEvent[] = [];
+    for (let i = 0; i < 120 * 150 && !a.s.destroyed; i++) {
+      const hdgTo = bearingTo(a, radar.pos.x, radar.pos.z);
+      const att = a.attitude();
+      const he = ((hdgTo - att.heading + 540) % 360) - 180;
+      input.roll = Math.max(-1, Math.min(1, (Math.max(-60, Math.min(60, he * 3)) - att.bank) * 0.04));
+      input.pitch = Math.max(-1, Math.min(1, (alt - a.s.pos.y) * 0.002 - a.s.vel.y * 0.03 + (1 / Math.max(0.3, Math.cos((att.bank * Math.PI) / 180)) - 1) * 0.25));
+      ev.length = 0;
+      a.step(dt, input, ev);
+      act = noActions();
+      if (!released && c.lgbSolution(a.s).inRange) {
+        act.pickle = true;
+        released = true;
+      }
+      c.step(dt, a.s, act, true, true, []);
+      th.step(dt, a, th.missileWarning, [], ev);
+      if (radar.destroyed) break;
+    }
+    if (radar.destroyed) kills++;
+    if (a.s.destroyed) deaths++;
+  }
+  console.log(`Bomb the SAM radar from 15k ft with chaff: radar killed ${kills}/${n}, shot down ${deaths}/${n}`);
+}

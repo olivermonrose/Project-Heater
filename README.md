@@ -58,7 +58,7 @@ AVIONICS on, NAV LIGHTS on, CANOPY close, PARK BRAKE off. After landing, the sam
 ## Surviving the air defences
 
 - **Radar warning display** (centre of the panel, under the UFC): **S** is the SAM radar, **A** an anti-aircraft gun. Outer ring and green = it can see you. Middle ring, amber with a box = it is locked on. Inner ring, red and flashing with LAUNCH = a missile is guiding on you. Red diamonds are missiles coming at you; the HUD flashes **MISSILE**.
-- **SAM** (target area C, red dashed ring on the NAV page, about 8.5 nm): when it launches, turn until the S sits off your wingtip (you are "in the notch", flying across its beam) and hold D-pad down for chaff. Chaff works much better in the notch. Below about 150 ft, or behind a mountain, the radar can't see you at all. Kill the radar and its missiles go dumb.
+- **SAM** (target area C, red dashed ring on the NAV page, about 7.5 nm): when it launches, turn until the S sits off your wingtip (you are "in the notch", flying across its beam) and hold D-pad down for chaff. Chaff works much better in the notch. Below about 150 ft, or behind a mountain, the radar can't see you at all. Kill the radar and its missiles go dumb.
 - **Heat seekers** (with the armor column and the depot): no radar warning, just MISSILE. Drop flares and come out of afterburner. They can't reach you above about 13,000 ft.
 - **Guns** (around every target area): stay above about 13,000 ft, or keep turning and changing altitude if you go low.
 

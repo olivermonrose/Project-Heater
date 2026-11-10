@@ -77,8 +77,8 @@ interface MissileSpec {
 }
 
 const SPECS: Record<MissileKind, MissileSpec> = {
-  radar: { boost: 5, boostAcc: 230, sustain: 0, sustainAcc: 0, drag: 0.000045, maxG: 32, nav: 4, fuze: 16, life: 45, minSpeed: 280, maxDamage: 95 },
-  ir: { boost: 2.2, boostAcc: 280, sustain: 3, sustainAcc: 35, drag: 0.00011, maxG: 22, nav: 3.5, fuze: 7, life: 18, minSpeed: 220, maxDamage: 62 },
+  radar: { boost: 5, boostAcc: 230, sustain: 0, sustainAcc: 0, drag: 0.000045, maxG: 24, nav: 4, fuze: 12, life: 40, minSpeed: 300, maxDamage: 65 },
+  ir: { boost: 2.2, boostAcc: 280, sustain: 3, sustainAcc: 35, drag: 0.00011, maxG: 22, nav: 3.5, fuze: 7, life: 18, minSpeed: 220, maxDamage: 50 },
 };
 
 /** Per-emplacement AI state. */
@@ -98,7 +98,7 @@ interface Emitter {
   notchTime: number;
 }
 
-export const SAM_LAUNCH_RANGE = 16000;
+export const SAM_LAUNCH_RANGE = 14000;
 export const SAM_DETECT_RANGE = 35000;
 const SAM_TRACK_RANGE = 26000;
 const AAA_RANGE = 4000;
@@ -145,7 +145,7 @@ export class Threats {
       if (t.kind !== 'samRadar' && t.kind !== 'samLauncher' && t.kind !== 'aaa' && t.kind !== 'manpads') continue;
       this.emitters.set(t.id, {
         t, detect: 0, tracking: false, trackTime: 0, lockout: 0, cooldown: 0,
-        missiles: t.kind === 'samLauncher' ? 2 : t.kind === 'manpads' ? 2 : 0,
+        missiles: t.kind === 'samLauncher' ? 1 : t.kind === 'manpads' ? 2 : 0,
         firing: false, burst: 0, fireAcc: 0, aimError: new Vector3(), wasSeen: false, notchTime: 0,
       });
     }
@@ -287,13 +287,13 @@ export class Threats {
         const radar = this.emitters.get(m.sourceId);
         // Chaff works far better when you are "in the notch": flying across the radar's beam.
         const notch = radar ? 1 - Math.min(1, Math.abs(radialSpeed(s, radar.t.pos)) / 160) : 0.5;
-        const p = 0.12 + 0.6 * notch;
+        const p = 0.3 + 0.6 * notch;
         if (Math.random() < p) {
           m.decoy = d;
           if (radar) {
             radar.tracking = false;
             radar.trackTime = 0;
-            radar.lockout = 3 + Math.random() * 2;
+            radar.lockout = 5 + Math.random() * 2;
           }
         }
       } else if (d.kind === 'flare' && m.kind === 'ir') {
@@ -337,9 +337,9 @@ export class Threats {
         // beam (the "notch") makes the doppler return vanish too.
         const clutter = agl < 45;
         // Holding the notch for a second breaks the track.
-        const inNotch = Math.abs(radialSpeed(s, sensor)) < 30 && agl < 6000;
+        const inNotch = Math.abs(radialSpeed(s, sensor)) < 50 && agl < 6000;
         e.notchTime = inNotch ? e.notchTime + dt : 0;
-        const notched = e.notchTime > 1;
+        const notched = e.notchTime > 0.6;
         const sees = los && !clutter;
         if (sees) e.detect += dt;
         else e.detect = Math.max(0, e.detect - dt * 3);
@@ -347,7 +347,9 @@ export class Threats {
         e.tracking = canTrack;
         e.trackTime = canTrack ? e.trackTime + dt : 0;
         const inFlight = radarInFlight.get(t.id) ?? 0;
-        if (e.tracking && e.trackTime > 2.5 && range < SAM_LAUNCH_RANGE && above < 16000 && e.cooldown <= 0 && inFlight < 1) {
+        // One missile at a time, and a pause after each one before the next.
+        if (inFlight > 0) e.cooldown = Math.max(e.cooldown, 12);
+        if (e.tracking && e.trackTime > 4 && range < SAM_LAUNCH_RANGE && above < 16000 && e.cooldown <= 0 && inFlight < 1) {
           const launcher = [...this.emitters.values()].find((x) => x.t.kind === 'samLauncher' && x.t.site === t.site && !x.t.destroyed && x.missiles > 0);
           if (launcher) {
             launcher.missiles--;

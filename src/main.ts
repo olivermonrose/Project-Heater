@@ -85,7 +85,7 @@ function startFlight(kind: StartKind) {
   lastStart = kind;
   if (kind === 'cold' || kind === 'hot') aircraft.resetOnGround(RAMP_START.x, RAMP_START.z, RAMP_START.heading, kind === 'cold');
   else if (kind === 'runway') aircraft.resetOnGround(RUNWAY_START.x, RUNWAY_START.z, RUNWAY_START.heading);
-  else aircraft.resetInAir(-6000, 300 + 8000 / 3.281, 9000, 20, 160);
+  else aircraft.resetInAir(2000, 300 + 8000 / 3.281, -2000, 72, 180); // 5 nm west of the depot, pointed at it
   input.resetForNewFlight(kind);
   combat.reset();
   threats.reset(combat);
@@ -107,7 +107,7 @@ function startFlight(kind: StartKind) {
   if (kind === 'cold') showMessage('Cold and dark. Follow the CHECKLIST page on the left screen. Press View (or F) for switch mode', 9);
   else if (kind === 'hot') showMessage('Release the PARK BRAKE, then taxi east and south to runway 36', 7);
   else if (kind === 'runway') showMessage('Cleared for takeoff, runway 36. Full throttle, rotate at 150 knots', 6);
-  else showMessage('Airborne. Home base is on your NAV page', 4);
+  else showMessage('Airborne, 5 nm west of the supply depot (A) and pointed at it. Home base is just behind you', 6);
 }
 
 function setPaused(p: boolean) {
@@ -213,7 +213,7 @@ function handleThreatEvents(tev: ThreatEvent[]) {
         showMessage('Out of chaff and flares', 2.5);
         break;
       case 'newContact':
-        if (e.contact.type === 'SAM') hintOnce('samSearch', 'A SAM radar is looking at you. Watch the radar warning display (centre, under the UFC)', 5);
+        if (e.contact.type === 'SAM' && msgTimer <= 0) hintOnce('samSearch', 'A SAM radar is looking at you. Watch the radar warning display (centre, under the UFC)', 5);
         break;
     }
   }
